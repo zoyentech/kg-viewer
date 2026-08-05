@@ -39,7 +39,7 @@ func main() {
 		graphLoader = nclient
 		log.Infof("Neo4j knowledge graph enabled (db=%s)", cfg.Neo4jDatabase)
 	} else {
-		log.Infof("Neo4j not configured — /v1/graph/kg returns 503, viewer uses sample data")
+		log.Infof("Neo4j not configured — serving from embedded snapshot cache")
 	}
 
 	r := gin.Default()
@@ -47,9 +47,17 @@ func main() {
 	// 3D knowledge-graph viewer (embedded static page, same origin as API).
 	r.GET("/kg-viewer", viewer.Handler)
 	r.GET("/kg-viewer/", viewer.Handler)
+	r.GET("/kg-viewer/snapshot.json", viewer.SnapshotHandler)
+
+	// Snapshot cache: always available from the embedded JSON, used as
+	// automatic fallback when Neo4j is unreachable.
+	snapshotLoader, err := handler.NewSnapshotLoader(viewer.SnapshotJSON)
+	if err != nil {
+		log.Fatalf("snapshot parse: %v", err)
+	}
 
 	// Knowledge-graph snapshot API.
-	gh := handler.NewGraphHandler(graphLoader, log)
+	gh := handler.NewGraphHandler(graphLoader, snapshotLoader, log)
 	r.GET("/v1/graph/kg", gh.KG)
 	r.GET("/v1/node/detail", gh.NodeDetail)
 

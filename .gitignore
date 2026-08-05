@@ -1,6 +1,11 @@
 # Binaries
 bin/
 *.exe
+/import
+/server
+
+# Test output
+test-results/
 
 # Env
 .env

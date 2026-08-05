@@ -17,3 +17,12 @@ var indexHTML []byte
 func Handler(c *gin.Context) {
 	c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
 }
+
+//go:embed snapshot.json
+var SnapshotJSON []byte
+
+// SnapshotHandler serves the cached Neo4j graph snapshot so the viewer
+// can load offline via ?data=/kg-viewer/snapshot.json.
+func SnapshotHandler(c *gin.Context) {
+	c.Data(http.StatusOK, "application/json; charset=utf-8", SnapshotJSON)
+}

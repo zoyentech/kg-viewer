@@ -1,4 +1,4 @@
-.PHONY: help build run test neo4j-up neo4j-down neo4j-seed neo4j-logs clean
+.PHONY: help build run test snapshot neo4j-up neo4j-down neo4j-seed neo4j-logs clean
 
 PORT ?= 8090
 
@@ -8,6 +8,7 @@ help:
 	@echo "Targets:"
 	@echo "  make run         Run the server (port $$(PORT))"
 	@echo "  make build       Build binary to bin/kg-viewer"
+	@echo "  make snapshot    Refresh snapshot.json from Neo4j (run while M3 is online)"
 	@echo "  make test        Run unit tests"
 	@echo "  make neo4j-up    Start local Neo4j (docker compose)"
 	@echo "  make neo4j-seed  Seed sample graph data (idempotent)"
@@ -17,6 +18,9 @@ help:
 
 build:
 	mkdir -p bin && go build -o bin/kg-viewer ./cmd/server
+
+snapshot:
+	go run ./cmd/snapshot
 
 run:
 	KG_VIEWER_PORT=$(PORT) go run ./cmd/server

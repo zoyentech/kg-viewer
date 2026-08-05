@@ -28,7 +28,7 @@ func TestHandler_ServesEmbeddedHTML(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
-		`<title>3D 知识图谱`,
+		`<title>营养健康循证知识图谱`,
 		`/v1/graph/kg`,               // live API URL
 		"three@0.160.0",              // three.js CDN version pin
 		"focus && n.id === focus.id", // animation loop must not deref null focus

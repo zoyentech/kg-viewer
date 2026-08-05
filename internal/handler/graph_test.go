@@ -41,7 +41,7 @@ func graphTestRouter(t *testing.T, loader handler.GraphLoader) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	h := handler.NewGraphHandler(loader, logger.Logger(testLogger{}))
+	h := handler.NewGraphHandler(loader, nil, logger.Logger(testLogger{}))
 	r.GET("/v1/graph/kg", h.KG)
 	return r
 }
@@ -105,7 +105,7 @@ func TestGraphKG_LoaderError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/graph/kg", nil)
 	graphTestRouter(t, loader).ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadGateway {
+	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

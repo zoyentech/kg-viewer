@@ -49,9 +49,11 @@ var chineseToEnglish = map[string]string{
 // GraphNode is a node as exposed by GET /v1/graph/kg (matches the
 // payload shape consumed by the 3D viewer).
 type GraphNode struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
-	Type  string `json:"type"`
+	ID          string         `json:"id"`
+	Label       string         `json:"label"`
+	Type        string         `json:"type"`
+	Description string         `json:"description,omitempty"`
+	Properties  map[string]any `json:"properties,omitempty"`
 }
 
 // GraphLink is a directed relationship between two node IDs.
@@ -222,6 +224,8 @@ func (c *Client) Fetch(ctx context.Context, opts Options) (*KnowledgeGraph, erro
     evidence_id: %[1]s.evidence_id,
     product_id: %[1]s.product_id,
     ingredient_id: %[1]s.ingredient_id,
+    description: %[1]s.description,
+    props: properties(%[1]s),
     idn: id(%[1]s)
   }`, varName)
 	}
@@ -287,9 +291,11 @@ RETURN %[9]s AS anode, %[10]s AS bnode, 'SUPPORTS_TOPIC' AS rt%[4]s
 			typ = "node"
 		}
 		nodes = append(nodes, GraphNode{
-			ID:    id,
-			Label: resolveLabel(m, labelProps),
-			Type:  typ,
+			ID:          id,
+			Label:       resolveLabel(m, labelProps),
+			Type:        typ,
+			Description: str(m["description"]),
+			Properties:  toPropsMap(m["props"]),
 		})
 	}
 
@@ -319,7 +325,7 @@ RETURN %[9]s AS anode, %[10]s AS bnode, 'SUPPORTS_TOPIC' AS rt%[4]s
 		return nil, fmt.Errorf("neo4j read: %w", err)
 	}
 
-	return &KnowledgeGraph{Nodes: nodes, Links: links, Source: "neo4j"}, nil
+	return FilterDirty(&KnowledgeGraph{Nodes: nodes, Links: links, Source: "neo4j"}), nil
 }
 
 // resolveLabel picks the best human-readable string for a node, with
@@ -354,7 +360,65 @@ func str(v any) string {
 		return strconv.FormatInt(t, 10)
 	case float64:
 		return strconv.FormatFloat(t, 'f', -1, 64)
-	default:
+default:
 		return fmt.Sprintf("%v", t)
 	}
+}
+
+// toPropsMap safely casts a Neo4j properties() value to map[string]any.
+// Returns nil when the value is absent or not a map.
+func toPropsMap(v any) map[string]any {
+	if m, ok := v.(map[string]any); ok {
+		return m
+	}
+	return nil
+}
+// dirtyLabelPatterns lists substrings that mark a node as a sentinel /
+// placeholder produced when a source query returned no real results
+// (e.g. an empty PubMed search). Such nodes carry no useful information
+// and are stripped from every render path.
+var dirtyLabelPatterns = []string{
+	"未检索到符合条件的 PubMed",
+}
+
+// isDirtyNode reports whether a node's label or description matches any
+// known sentinel pattern that should be excluded from the rendered graph.
+func isDirtyNode(n GraphNode) bool {
+	for _, p := range dirtyLabelPatterns {
+		if strings.Contains(n.Label, p) || strings.Contains(n.Description, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// FilterDirty removes sentinel / placeholder nodes (whose label or
+// description matches a known dirty pattern) and any links that reference
+// them. When nothing is filtered the original graph is returned as-is.
+// Applied to every Fetch result so the viewer never renders nodes like
+// "未检索到符合条件的 PubMed …".
+func FilterDirty(kg *KnowledgeGraph) *KnowledgeGraph {
+	if kg == nil || len(kg.Nodes) == 0 {
+		return kg
+	}
+	dropped := make(map[string]bool)
+	var nodes []GraphNode
+	for _, n := range kg.Nodes {
+		if isDirtyNode(n) {
+			dropped[n.ID] = true
+			continue
+		}
+		nodes = append(nodes, n)
+	}
+	if len(dropped) == 0 {
+		return kg
+	}
+	var links []GraphLink
+	for _, l := range kg.Links {
+		if dropped[l.Source] || dropped[l.Target] {
+			continue
+		}
+		links = append(links, l)
+	}
+	return &KnowledgeGraph{Nodes: nodes, Links: links, Source: kg.Source}
 }

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>3D 知识图谱 · 自顶向下层级渲染</title>
+<title>营养健康循证知识图谱</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; overflow: hidden; background: #0a0f1e; color: #e6ecff;
@@ -32,19 +32,67 @@
   #tooltip { position: fixed; pointer-events: none; display: none; z-index: 30; max-width: 280px;
     background: rgba(8, 13, 28, 0.92); border: 1px solid rgba(120, 160, 255, 0.35); padding: 6px 10px;
     border-radius: 8px; font-size: 13px; box-shadow: 0 4px 18px rgba(0,0,0,.4); }
-  #infoCard { left: 16px; bottom: 62px; min-width: 224px; }
-  #infoCard.hidden { display: none; }
+ #infoCard.hidden { display: none; }
+ #infoCard { left: 16px; top: 50%; transform: translateY(-50%); width: 216px; max-width: 216px; overflow-wrap: break-word; word-break: break-word; }
   #infoName { font-size: 18px; font-weight: 700; }
   #infoType { font-size: 12px; opacity: .72; margin-top: 3px; }
   #infoId { font-size: 11px; opacity: .45; margin-top: 2px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   #infoStat { font-size: 12px; opacity: .78; margin-top: 8px; }
-  .help { position: fixed; bottom: 16px; right: 16px; font-size: 11px; opacity: .5; text-align: right; z-index: 10; line-height: 1.7; }
+  #infoDesc { font-size: 13px; line-height: 1.65; margin-top: 9px; padding-top: 9px; border-top: 1px solid rgba(120,160,255,.18); display: none; }
+  #infoDesc .desc-loading { opacity: .5; }
+  #infoDesc .desc-error { opacity: .55; font-size: 12px; }
+ .help { position: fixed; bottom: 16px; right: 16px; font-size: 11px; opacity: .5; text-align: right; z-index: 10; line-height: 1.7; }
+  #searchPanel { left: 50%; top: 48px; transform: translateX(-50%); width: 360px; padding: 8px 10px; }
+  .search-row { display: flex; gap: 6px; }
+  #searchTypeFilter { flex: none; background: rgba(13,20,40,.6); border: 1px solid rgba(120,160,255,.25);
+    border-radius: 8px; padding: 7px 6px; color: #e6ecff; font-size: 12px; outline: none;
+    font-family: inherit; cursor: pointer; }
+  #searchTypeFilter:focus { border-color: rgba(78,205,196,.5); }
+  #searchTypeFilter option { background: #0d1428; color: #e6ecff; }
+  .search-input-wrap { position: relative; flex: 1; min-width: 0; }
+  #searchInput { width: 100%; background: rgba(13,20,40,.6); border: 1px solid rgba(120,160,255,.25);
+    border-radius: 8px; padding: 7px 10px; color: #e6ecff; font-size: 13px; outline: none;
+    font-family: inherit; padding-right: 28px; }
+  #searchInput:focus { border-color: rgba(78,205,196,.5); }
+  #searchInput::placeholder { color: rgba(230,236,255,.35); }
+  #searchClear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    display: none; width: 20px; height: 20px; padding: 0; border: none; border-radius: 50%;
+    background: transparent; color: rgba(230,236,255,.4); cursor: pointer;
+    align-items: center; justify-content: center; transition: color .15s, background .15s; }
+  #searchClear:hover { color: rgba(230,236,255,.9); background: rgba(120,160,255,.15); }
+  #searchClear svg { width: 13px; height: 13px; }
+  #searchResults { display: none; margin-top: 6px; max-height: 340px; overflow-y: auto; }
+  #searchResults::-webkit-scrollbar { width: 4px; }
+  #searchResults::-webkit-scrollbar-thumb { background: rgba(120,160,255,.25); border-radius: 2px; }
+  .search-result { padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 12px;
+    display: flex; align-items: center; gap: 6px; transition: background .12s; }
+  .search-result:hover { background: rgba(78,205,196,.14); }
+  .search-result .sr-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .search-result .sr-type { margin-left: auto; opacity: .5; font-size: 11px; white-space: nowrap; }
+  .legend-item { cursor: pointer; transition: opacity .15s; }
+  .legend-item.dimmed { opacity: .35; }
+  .legend-item.dimmed .dot { box-shadow: none !important; }
 </style>
 </head>
 <body>
 <div id="viewport"></div>
 
-<div id="title" class="panel">3D 知识图谱 · 自顶向下层级渲染</div>
+<div id="title" class="panel">营养健康循证知识图谱</div>
+
+<div id="searchPanel" class="panel">
+  <div class="search-row">
+    <select id="searchTypeFilter"></select>
+    <div class="search-input-wrap">
+      <input type="text" id="searchInput" placeholder="搜索节点名称…" autocomplete="off">
+      <button id="searchClear" type="button" aria-label="清除">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+        </svg>
+      </button>
+    </div>
+  </div>
+  <div id="searchResults"></div>
+</div>
 
 <div id="legend" class="panel">
   <h3>节点类型</h3>
@@ -70,6 +118,7 @@
   <div id="infoType"></div>
   <div id="infoId"></div>
   <div id="infoStat"></div>
+  <div id="infoDesc"></div>
 </div>
 <div id="tooltip"></div>
 <div class="help">拖拽 JSON 文件到窗口可加载自定义图谱<br>滚轮缩放 · 拖拽旋转 · 点击节点聚焦 · Esc 取消</div>
@@ -209,9 +258,11 @@ let linkObjs = [];
 let hoveredId = null;        // 鼠标悬停（临时高亮预览）
 let selectedId = null;       // 节点 id，仅用于 info card
 let pinnedId = null;         // 点击锁住的高亮（持续显示，相机不动）
-let focusMode = null;        // null | 'product' | 'reachable'
+let focusMode = null;        // null | 'lineage'
 let fly = null;
 const cfg = { layerSpacing: 6, ringSpacing: 8, showLabels: true };
+const hiddenTypes = new Set();
+const searchState = { query: '', matches: [], typeFilter: 'Product' };
 
 function typeColor(type, types) {
   // 1) 用户给 5 种 Neo4j 标签分配的固定色
@@ -226,6 +277,7 @@ function typeColor(type, types) {
   return new THREE.Color(palette[h % palette.length]);
 }
 function typeLabel(type, types) {
+  if (TYPE_LABELS_CN[type]) return TYPE_LABELS_CN[type];
   const t = types[type];
   return t ? t.label : String(type);
 }
@@ -296,7 +348,9 @@ function buildGraph(data) {
   const nodes = (data.nodes || []).map(n => ({
     id: String(n.id ?? n.name ?? ''),
     label: n.label ?? n.name ?? String(n.id),
-    type: n.type ?? 'default'
+    type: n.type ?? 'default',
+    description: n.description ?? '',
+    properties: n.properties ?? null,
   })).filter(n => n.id);
   const links = (data.links || []).map(l => ({
     a: typeof l.source === 'object' ? String(l.source.id ?? l.source.name) : String(l.source),
@@ -453,6 +507,33 @@ const TYPE_LABELS_CN = {
   Evidence: '循证证据',
 };
 
+function renderSearchTypeFilter(data) {
+  const sel = $('#searchTypeFilter');
+  const counts = {};
+  for (const n of data.nodes) counts[n.type ?? 'default'] = (counts[n.type ?? 'default'] || 0) + 1;
+  const types = Object.assign({}, SAMPLE.types, data.types || {});
+  const order = Object.keys(TYPE_DEPTHS);
+  const extra = Object.keys(counts).filter(t => !order.includes(t)).sort();
+  const allOrdered = [...order, ...extra];
+  const prev = sel.value;
+  sel.innerHTML = '';
+  const allOpt = document.createElement('option');
+  allOpt.value = 'all';
+  allOpt.textContent = '全部';
+  sel.appendChild(allOpt);
+  for (const t of allOrdered) {
+    if (!counts[t]) continue;
+    const info = types[t];
+    const label = TYPE_LABELS_CN[t] || (info && info.label) || t;
+    const opt = document.createElement('option');
+    opt.value = t;
+    opt.textContent = label;
+    sel.appendChild(opt);
+  }
+  sel.value = [...sel.options].some(o => o.value === prev) ? prev : 'Product';
+  searchState.typeFilter = sel.value;
+}
+
 function renderLegend(data) {
   const types = Object.assign({}, SAMPLE.types, data.types || {});
   const counts = {};
@@ -471,10 +552,69 @@ function renderLegend(data) {
     const label = TYPE_LABELS_CN[t] || (info && info.label) || t;
     const item = document.createElement('div');
     item.className = 'legend-item';
+    item.dataset.type = t;
+    item.addEventListener('click', () => toggleType(t));
     item.innerHTML = `<span class="dot" style="background:${color};box-shadow:0 0 8px ${color}"></span>` +
       `<span>${label}</span><span class="legend-count">${c}</span>`;
     el.appendChild(item);
   }
+}
+
+// --- Type filter: click legend items to toggle visibility ---
+function toggleType(type) {
+  if (hiddenTypes.has(type)) hiddenTypes.delete(type);
+  else hiddenTypes.add(type);
+  document.querySelectorAll('.legend-item').forEach(el => {
+    if (el.dataset.type === type) el.classList.toggle('dimmed', hiddenTypes.has(type));
+  });
+}
+
+// --- Search: live filter nodes by label + type ---
+function performSearch(query) {
+  searchState.query = query.trim().toLowerCase();
+  const results = $('#searchResults');
+  if (!searchState.query && searchState.typeFilter === 'all') {
+    results.style.display = 'none';
+    results.innerHTML = '';
+    searchState.matches = [];
+    return;
+  }
+  const types = Object.assign({}, SAMPLE.types, currentData?.types || {});
+  searchState.matches = [...nodeMap.values()]
+    .filter(n => {
+      const matchesText = !searchState.query || n.label.toLowerCase().includes(searchState.query);
+      const matchesType = searchState.typeFilter === 'all' || n.type === searchState.typeFilter;
+      return matchesText && matchesType;
+    })
+    .sort((a, b) => a.label.localeCompare(b.label))
+    .slice(0, 50);
+  renderSearchResults(searchState.matches, types);
+}
+
+function renderSearchResults(matches, types) {
+  const el = $('#searchResults');
+  if (!matches.length) {
+    el.innerHTML = '<div style="padding:8px;font-size:12px;opacity:.5;text-align:center;">无匹配结果</div>';
+    el.style.display = 'block';
+    return;
+  }
+  el.innerHTML = '';
+  for (const n of matches) {
+    const color = TYPE_COLORS[n.type] || '#' + typeColor(n.type, types).getHexString();
+    const typeLbl = TYPE_LABELS_CN[n.type] || (types[n.type]?.label) || n.type;
+    const item = document.createElement('div');
+    item.className = 'search-result';
+    item.innerHTML = `<span class="sr-dot" style="background:${color}"></span>` +
+      `<span>${n.label}</span><span class="sr-type">${typeLbl}</span>`;
+    item.addEventListener('click', () => {
+      selectNode(n.id);
+      el.style.display = 'none';
+      $('#searchInput').value = n.label;
+      updateClearButton();
+    });
+    el.appendChild(item);
+  }
+  el.style.display = 'block';
 }
 
 const raycaster = new THREE.Raycaster();
@@ -503,42 +643,33 @@ function setHover(id) {
   }
 }
 
-// 计算当前 focus：优先支持产品节点“只看本品及后代”；否则走 BFS 可达子图。
+// 计算当前 focus：无论点击哪一层节点，都只显示其祖先链 + 子孙链。
+// 祖先 = 沿 parents 向上遍历（不横向扩散到兄弟节点）；
+// 子孙 = 沿 children 向下遍历（不横向扩散到兄弟节点）。
 // hover 不参与高亮决策（只显示 tooltip），Esc / 空白 click 稳定复位。
 function computeFocus() {
   if (!pinnedId || !nodeMap.has(pinnedId)) return null;
   const id = pinnedId;
   const n = nodeMap.get(id);
-  if (focusMode === 'product' && n.type === 'Product') {
-    const relevant = new Set([id]);
-    const queue = [...n.children];
-    while (queue.length) {
-      const cur = queue.shift();
-      if (!relevant.add(cur)) continue;
-      const cn = nodeMap.get(cur);
-      if (cn) {
-        for (const child of cn.children) if (!relevant.has(child)) queue.push(child);
-      }
-    }
-    return { id, n, reachable: relevant, mode: 'product' };
-  }
-  const reachable = new Set([id]);
-  const queue = [id];
+  const relevant = new Set([id]);
+
+  // 祖先：沿 parents 向上 BFS（不沿 children 横向扩散）。
+  let queue = [...n.parents];
   while (queue.length) {
     const cur = queue.shift();
-    const cn = nodeMap.get(cur);
-    if (!cn) continue;
-    const nbrs = cn.parents.length < cn.children.length
-      ? [...cn.children, ...cn.parents]
-      : [...cn.parents, ...cn.children];
-    for (const nbr of nbrs) {
-      if (!reachable.has(nbr) && nodeMap.has(nbr)) {
-        reachable.add(nbr);
-        queue.push(nbr);
-      }
-    }
+    if (relevant.has(cur) || !nodeMap.has(cur)) continue;
+    relevant.add(cur);
+    for (const p of nodeMap.get(cur).parents) queue.push(p);
   }
-  return { id, n, reachable, mode: 'reachable' };
+  // 子孙：沿 children 向下 BFS（不沿 parents 横向扩散）。
+  queue = [...n.children];
+  while (queue.length) {
+    const cur = queue.shift();
+    if (relevant.has(cur) || !nodeMap.has(cur)) continue;
+    relevant.add(cur);
+    for (const c of nodeMap.get(cur).children) queue.push(c);
+  }
+  return { id, n, reachable: relevant, mode: 'lineage' };
 }
 
 function selectNode(id) {
@@ -546,9 +677,10 @@ function selectNode(id) {
   // 相机距离 / 位置完全由用户拖拽 / 滚轮控制。
   // id=null 时也清掉 hover（Esc / 点空白 = 完整复位）
   selectedId = id;
+  updateClearButton();
   if (id && nodeMap.has(id)) {
     pinnedId = id;
-    focusMode = nodeMap.get(id).type === 'Product' ? 'product' : 'reachable';
+    focusMode = 'lineage';
   } else {
     pinnedId = null;
     focusMode = null;
@@ -568,6 +700,41 @@ function selectNode(id) {
   $('#infoId').textContent = `id: ${n.id}`;
   $('#infoStat').textContent = `${n.children.length} 个子节点 · ${n.parents.length} 个父节点 · 深度 ${n.depth}`;
   card.classList.remove('hidden');
+
+  // Fetch node detail (description) when clicking an Ingredient node.
+  const descEl = $('#infoDesc');
+  if (n.description) {
+    // Description already embedded in the loaded data (snapshot/API).
+    descEl.textContent = n.description;
+    descEl.style.display = 'block';
+  } else if (n.type === 'Ingredient') {
+    descEl.innerHTML = '<span class="desc-loading">加载描述…</span>';
+    descEl.style.display = 'block';
+    fetchNodeDetail(id);
+  } else {
+    descEl.style.display = 'none';
+    descEl.textContent = '';
+  }
+}
+
+// fetchNodeDetail queries the backend for a single node's properties
+// (description etc.) by elementId. Only updates the DOM if the user is
+// still on the same node (selectedId guard against stale responses).
+async function fetchNodeDetail(id) {
+  const descEl = $('#infoDesc');
+  try {
+    const resp = await fetch(NODE_DETAIL_URL + '?id=' + encodeURIComponent(id));
+    const body = await resp.json();
+    if (selectedId !== id) return;
+    if (body.code === 0 && body.data && body.data.description) {
+      descEl.textContent = body.data.description;
+    } else {
+      descEl.innerHTML = '<span class="desc-error">暂无描述</span>';
+    }
+  } catch {
+    if (selectedId !== id) return;
+    descEl.innerHTML = '<span class="desc-error">描述加载失败</span>';
+  }
 }
 
 function pickNodeId() {
@@ -597,21 +764,19 @@ const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   const now = performance.now();
-  // 高亮策略（click 节点 → 整张可达子图亮起，其它全部隐藏）：
+  // 高亮策略（click 节点 → 仅祖先+子孙链亮起，其它全部隐藏）：
   //   focus.reachable  → 节点 + halo + label 可见，emissive 保持原色
   //   focus 自身       → 额外 emissive 白色 + 1.18× scale
   //   不在 reachable    → mesh.visible / halo.visible / label.visible = false
   //   边两端都在 reachable → opacity 1.0；否则 0
   const focus = computeFocus();
   const reachable = focus ? focus.reachable : null;
-  const isProductFocus = focus && focus.mode === 'product';
-  const showAllLinesWhenProductFocus = currentData?.showAllLinesWhenProductFocus === true;
-  // 实时 stats：focus 变化时显示子图规模
+  // 实时 stats：focus 变化时显示谱系子图规模
   if (focus) {
     {
     const maxD = nodeMap.size ? Math.max(0, ...nodeMap.values().map(n => n.depth)) : 0;
     const typeSet = new Set([...nodeMap.values()].map(n => n.type));
-    const label = isProductFocus ? `产品子图 ${reachable.size} 节点` : `高亮子图 ${reachable.size} 节点`;
+    const label = `谱系子图 ${reachable.size} 节点`;
     $('#stats').textContent = `${nodeMap.size} 节点 · ${linkObjs.length} 条关系 · ${typeSet.size} 种类型 · ${maxD + 1} 层 · ${label}`;
   }
   } else if ($('#stats').textContent.includes('子图')) {
@@ -625,7 +790,7 @@ renderer.setAnimationLoop(() => {
   for (const n of nodeMap.values()) {
     const age = (now - n.birth) / 500;
     const birthScale = age < 1 ? easeOutBack(Math.min(1, age)) : 1;
-    const visible = !focus || reachable.has(n.id);
+    const visible = (!focus || reachable.has(n.id)) && !hiddenTypes.has(n.type);
     if (visible) {
       if (focus && n.id === focus.id) {
         // 焦点：白 emissive + 放大 1.18×
@@ -659,9 +824,7 @@ renderer.setAnimationLoop(() => {
     const age = (now - l.birth) / 400;
     let target = 0;
     if (!focus) {
-      target = 1;
-    } else if (isProductFocus && showAllLinesWhenProductFocus) {
-      target = reachable.has(l.a.id) || reachable.has(l.b.id) ? 1 : 0;
+      target = (hiddenTypes.has(l.a.type) || hiddenTypes.has(l.b.type)) ? 0 : 1;
     } else {
       target = reachable.has(l.a.id) && reachable.has(l.b.id) ? 1 : 0;
     }
@@ -692,8 +855,9 @@ function loadJSON(text) {
     pinnedId = null; focusMode = null; hoveredId = null;  // 切图必清高亮
     $('#infoCard').classList.add('hidden');
     buildGraph(data);
-    renderLegend(data);
-  } catch (err) {
+   renderLegend(data);
+    renderSearchTypeFilter(data);
+ } catch (err) {
     alert('JSON 格式不正确：需要 { nodes: [{ id, label, type }], links: [{ source, target }] }');
   }
 }
@@ -712,6 +876,17 @@ $('#resetView').addEventListener('click', () => {
 $('#resetScene').addEventListener('click', () => {
   // 接管原"点击空白处"的复位逻辑：清 pin/focus/hover + 关闭 info card
   selectNode(null);
+});
+$('#searchInput').addEventListener('input', e => { performSearch(e.target.value); updateClearButton(); });
+$('#searchTypeFilter').addEventListener('change', e => { searchState.typeFilter = e.target.value; performSearch($('#searchInput').value); });
+function updateClearButton() {
+  $('#searchClear').style.display = ($('#searchInput').value || selectedId) ? 'flex' : 'none';
+}
+$('#searchClear').addEventListener('click', () => {
+  $('#searchInput').value = '';
+  performSearch('');
+  selectNode(null);
+  updateClearButton();
 });
 window.addEventListener('dragover', e => e.preventDefault());
 window.addEventListener('drop', e => {
@@ -735,7 +910,9 @@ function showStatus(msg, color) {
   showStatus._t = setTimeout(() => { statusEl.style.display = 'none'; }, 9000);
 }
 
-const API_URL = (qParams.get('api') || '').replace(/\/+$/, '') + '/v1/graph/kg';
+const API_BASE = (qParams.get('api') || '').replace(/\/+$/, '');
+const API_URL = API_BASE + '/v1/graph/kg';
+const NODE_DETAIL_URL = API_BASE + '/v1/node/detail';
 
 async function loadFromAPI() {
   showStatus('正在从后端加载图谱…', '#4ecdc4');
@@ -747,16 +924,18 @@ async function loadFromAPI() {
     if (!data || !Array.isArray(data.nodes) || !Array.isArray(data.links)) {
       throw new Error((body && body.msg) || `后端返回异常（HTTP ${resp.status}）`);
     }
-    currentData = data;
-    buildGraph(data);
-    renderLegend(data);
-    showStatus(`已从后端加载 ${data.nodes.length} 节点 / ${data.links.length} 关系`, '#7ae0c3');
-  } catch (err) {
-    showStatus(`后端加载失败（${err.message}），展示内置示例数据`, '#ff9f6b');
-    currentData = SAMPLE;
-    buildGraph(SAMPLE);
-    renderLegend(SAMPLE);
-  }
+   currentData = data;
+   buildGraph(data);
+   renderLegend(data);
+    renderSearchTypeFilter(data);
+   showStatus(`已从后端加载 ${data.nodes.length} 节点 / ${data.links.length} 关系`, '#7ae0c3');
+ } catch (err) {
+   showStatus(`后端加载失败（${err.message}），展示内置示例数据`, '#ff9f6b');
+   currentData = SAMPLE;
+   buildGraph(SAMPLE);
+   renderLegend(SAMPLE);
+    renderSearchTypeFilter(SAMPLE);
+ }
 }
 const dataParam = qParams.get('data');
 if (dataParam) {
