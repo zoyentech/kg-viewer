@@ -49,7 +49,9 @@ func main() {
 	r.GET("/kg-viewer/", viewer.Handler)
 
 	// Knowledge-graph snapshot API.
-	r.GET("/v1/graph/kg", handler.NewGraphHandler(graphLoader, log).KG)
+	gh := handler.NewGraphHandler(graphLoader, log)
+	r.GET("/v1/graph/kg", gh.KG)
+	r.GET("/v1/node/detail", gh.NodeDetail)
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,

@@ -92,7 +92,7 @@ const SAMPLE = {
   types: {
     product:     { label: '配方',   color: '#ff6b6b' },
     ingredient:  { label: '成分',   color: '#4ecdc4' },
-    healthtopic: { label: '健康主题', color: '#a78bfa' },
+    healthtopic: { label: '健康结局', color: '#a78bfa' },
     evidence:    { label: '循证证据', color: '#96ceb4' }
   },
   nodes: [
@@ -117,7 +117,7 @@ const SAMPLE = {
     ['p1','i1'], ['p1','i2'], ['p2','i3'], ['p2','i4'], ['p3','i5'], ['p3','i6'],
     // Ingredient - Evidence (成分→论文, EVIDENCE_FOR)
     ['i1','e1'], ['i2','e1'], ['i3','e2'], ['i4','e2'], ['i5','e3'], ['i6','e3'],
-    // Evidence - HealthTopic (论文→健康主题, SUPPORTS_TOPIC)
+    // Evidence - HealthTopic (论文→健康结局, SUPPORTS_TOPIC)
     ['e1','t1'], ['e1','t3'], ['e2','t1'], ['e3','t2']
   ].map(([source, target]) => ({ source, target }))
 };
@@ -125,7 +125,7 @@ const SAMPLE = {
 // 顶到底层级顺序（用户指定，2026-08-05）。
 // EvidenceContext 经两跳穿透后不再出现；Evidence 借助 EvidenceContext 桥接到
 // Ingredient 和 HealthTopic，因此 Evidence 居中于二者之间，形成 4 层链路：
-//   Product 配方 → Ingredient 成分 → Evidence 循证证据 → HealthTopic 健康主题
+//   Product 配方 → Ingredient 成分 → Evidence 循证证据 → HealthTopic 健康结局
 // 任何不在表里的 type 会自动放到下一层（不挤占固定位置）。
 const TYPE_DEPTHS = {
   Product: 0,
@@ -449,7 +449,7 @@ function buildGraph(data) {
 const TYPE_LABELS_CN = {
   Product: '配方',
   Ingredient: '成分',
-  HealthTopic: '健康主题',
+  HealthTopic: '健康结局',
   Evidence: '循证证据',
 };
 

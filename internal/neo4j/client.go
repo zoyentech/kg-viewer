@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 )
@@ -37,12 +38,12 @@ var ChineseLabels = LabelSet{
 // chineseToEnglish normalises Chinese labels to the canonical English
 // type names the viewer expects (TYPE_DEPTHS / TYPE_COLORS etc.).
 var chineseToEnglish = map[string]string{
-	"配方":       "Product",
-	"成分":       "Ingredient",
-	"循证证据":     "Evidence",
-	"健康结局":     "HealthTopic",
-	"证据上下文":    "EvidenceContext",
-	"证据层级":     "EvidenceLayer",
+	"配方":    "Product",
+	"成分":    "Ingredient",
+	"循证证据":  "Evidence",
+	"健康结局":  "HealthTopic",
+	"证据上下文": "EvidenceContext",
+	"证据层级":  "EvidenceLayer",
 }
 
 // GraphNode is a node as exposed by GET /v1/graph/kg (matches the
@@ -102,6 +103,76 @@ func NewClient(ctx context.Context, uri, user, password, database string, labels
 
 // Close releases the underlying driver.
 func (c *Client) Close(ctx context.Context) error { return c.driver.Close(ctx) }
+
+// NodeDetailResult is the per-node detail payload returned by
+// GET /v1/node/detail. It exposes all Neo4j properties so the viewer
+// can render node-specific content (e.g. 成分 description).
+type NodeDetailResult struct {
+	ID          string         `json:"id"`
+	Type        string         `json:"type"`
+	Description string         `json:"description,omitempty"`
+	Properties  map[string]any `json:"properties,omitempty"`
+}
+
+// NodeDetail fetches a single node by its Neo4j elementId and returns
+// all properties plus the normalised type. Used by the 3D viewer when
+// a user clicks a node (e.g. 成分) to surface the description.
+func (c *Client) NodeDetail(ctx context.Context, elementID string) (*NodeDetailResult, error) {
+	sess := c.driver.NewSession(ctx, neo4j.SessionConfig{
+		DatabaseName: c.db,
+		AccessMode:   neo4j.AccessModeRead,
+	})
+	defer sess.Close(ctx)
+
+	res, err := sess.Run(ctx,
+		`MATCH (n) WHERE elementId(n) = $id
+		 RETURN properties(n) AS props, labels(n) AS labels`,
+		map[string]any{"id": elementID})
+	if err != nil {
+		return nil, fmt.Errorf("neo4j node detail: %w", err)
+	}
+
+	var props map[string]any
+	var labels []string
+	for res.Next(ctx) {
+		rec := res.Record()
+		if m, ok := rec.Values[0].(map[string]any); ok {
+			props = m
+		}
+		if ls, ok := rec.Values[1].([]any); ok {
+			for _, l := range ls {
+				if s, ok := l.(string); ok {
+					labels = append(labels, s)
+				}
+			}
+		}
+	}
+	if err := res.Err(); err != nil {
+		return nil, fmt.Errorf("neo4j node detail read: %w", err)
+	}
+	if props == nil {
+		return nil, fmt.Errorf("node not found: %s", elementID)
+	}
+
+	typ := ""
+	for _, l := range labels {
+		if strings.HasPrefix(l, "_") {
+			continue
+		}
+		typ = l
+		break
+	}
+	if en, ok := chineseToEnglish[typ]; ok {
+		typ = en
+	}
+
+	return &NodeDetailResult{
+		ID:          elementID,
+		Type:        typ,
+		Description: str(props["description"]),
+		Properties:  props,
+	}, nil
+}
 
 // Fetch runs a Cypher snapshot over the graph. The kg-viewer renders
 // 4 principal types: Product / Ingredient / Evidence / HealthTopic.
@@ -175,12 +246,12 @@ WHERE '%[5]s' IN labels(ev2) AND '%[1]s' IN labels(ec2) AND '%[8]s' IN labels(ht
   AND ($label = '' OR $label IN labels(ev2) OR $label IN labels(ht))
 RETURN %[9]s AS anode, %[10]s AS bnode, 'SUPPORTS_TOPIC' AS rt%[4]s
 `,
-		L.EvidenceContext,                              // %[1]s
-		nodeProj("a"), nodeProj("b"), limitClause,     // %[2]s %[3]s %[4]s
-		L.Evidence,                                    // %[5]s
-		nodeProj("ing"), nodeProj("ev"),               // %[6]s %[7]s
-		L.HealthTopic,                                 // %[8]s
-		nodeProj("ev2"), nodeProj("ht"),               // %[9]s %[10]s
+		L.EvidenceContext,                         // %[1]s
+		nodeProj("a"), nodeProj("b"), limitClause, // %[2]s %[3]s %[4]s
+		L.Evidence,                      // %[5]s
+		nodeProj("ing"), nodeProj("ev"), // %[6]s %[7]s
+		L.HealthTopic,                   // %[8]s
+		nodeProj("ev2"), nodeProj("ht"), // %[9]s %[10]s
 	)
 
 	sess := c.driver.NewSession(ctx, neo4j.SessionConfig{
