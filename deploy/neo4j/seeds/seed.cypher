@@ -1,0 +1,66 @@
+// 示例营养知识图谱（幂等：MERGE 以 name 为键）。
+// 关系方向约定：上层 → 下层（父 → 子），与 /v1/graph/kg 的布局一致。
+// Domain → Category → Nutrient / Food → Benefit（CONTAINS / PROVIDES）
+
+MERGE (d1:Domain { name: '营养与健康' })
+
+// --- 分类 ---
+MERGE (c1:Category { name: '宏量营养素' })
+MERGE (c2:Category { name: '微量营养素' })
+MERGE (c3:Category { name: '食物分类' })
+MERGE (d1)-[:CONTAINS]->(c1)
+MERGE (d1)-[:CONTAINS]->(c2)
+MERGE (d1)-[:CONTAINS]->(c3)
+
+// --- 营养素 ---
+MERGE (n1:Nutrient { name: '蛋白质' })
+MERGE (n2:Nutrient { name: '碳水化合物' })
+MERGE (n3:Nutrient { name: '脂肪' })
+MERGE (n4:Nutrient { name: '维生素C' })
+MERGE (n5:Nutrient { name: '钙' })
+MERGE (n6:Nutrient { name: '铁' })
+MERGE (c1)-[:CONTAINS]->(n1)
+MERGE (c1)-[:CONTAINS]->(n2)
+MERGE (c1)-[:CONTAINS]->(n3)
+MERGE (c2)-[:CONTAINS]->(n4)
+MERGE (c2)-[:CONTAINS]->(n5)
+MERGE (c2)-[:CONTAINS]->(n6)
+
+// --- 食物 ---
+MERGE (f1:Food { name: '谷物类' })
+MERGE (f2:Food { name: '米饭' })
+MERGE (f3:Food { name: '燕麦' })
+MERGE (f4:Food { name: '肉类' })
+MERGE (f5:Food { name: '鸡胸肉' })
+MERGE (f6:Food { name: '三文鱼' })
+MERGE (f7:Food { name: '蔬菜水果类' })
+MERGE (f8:Food { name: '菠菜' })
+MERGE (f9:Food { name: '苹果' })
+MERGE (f10:Food { name: '乳制品' })
+MERGE (f11:Food { name: '牛奶' })
+MERGE (c3)-[:CONTAINS]->(f1)
+MERGE (c3)-[:CONTAINS]->(f4)
+MERGE (c3)-[:CONTAINS]->(f7)
+MERGE (c3)-[:CONTAINS]->(f10)
+MERGE (f1)-[:CONTAINS]->(f2)
+MERGE (f1)-[:CONTAINS]->(f3)
+MERGE (f4)-[:CONTAINS]->(f5)
+MERGE (f4)-[:CONTAINS]->(f6)
+MERGE (f7)-[:CONTAINS]->(f8)
+MERGE (f7)-[:CONTAINS]->(f9)
+MERGE (f10)-[:CONTAINS]->(f11)
+
+// --- 功效（营养/食物 → 功效；同一功效可多父，演示 DAG 支持）---
+MERGE (b1:Benefit { name: '增肌' })
+MERGE (b2:Benefit { name: '供能' })
+MERGE (b3:Benefit { name: '膳食纤维' })
+MERGE (b4:Benefit { name: '补钙' })
+MERGE (b5:Benefit { name: '补铁' })
+MERGE (n1)-[:PROVIDES]->(b1)
+MERGE (n2)-[:PROVIDES]->(b2)
+MERGE (n5)-[:PROVIDES]->(b4)
+MERGE (n6)-[:PROVIDES]->(b5)
+MERGE (f5)-[:PROVIDES]->(b1)
+MERGE (f2)-[:PROVIDES]->(b2)
+MERGE (f9)-[:PROVIDES]->(b3)
+MERGE (f11)-[:PROVIDES]->(b4)

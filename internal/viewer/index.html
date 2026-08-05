@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D 知识图谱 · 自顶向下层级渲染</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; background: #0a0f1e; color: #e6ecff;
+    font-family: -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  #viewport { position: fixed; inset: 0; }
+  #viewport canvas { display: block; }
+  .panel { position: fixed; background: rgba(13, 20, 40, 0.74); border: 1px solid rgba(120, 160, 255, 0.2);
+    border-radius: 12px; backdrop-filter: blur(10px); padding: 12px 14px; z-index: 10; }
+  #title { left: 50%; top: 14px; transform: translateX(-50%); font-size: 14px; letter-spacing: 1px;
+    color: rgba(230, 236, 255, 0.92); padding: 8px 16px; white-space: nowrap; }
+  #legend { right: 16px; top: 16px; min-width: 158px; }
+  #legend h3 { font-size: 12px; font-weight: 600; color: rgba(230,236,255,.75); margin-bottom: 6px; letter-spacing: 1px; }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .legend-count { margin-left: auto; opacity: .55; font-size: 12px; font-variant-numeric: tabular-nums; }
+  #controls { left: 16px; top: 16px; width: 216px; display: flex; flex-direction: column; gap: 9px; }
+  #controls .group-title { font-size: 12px; color: rgba(230,236,255,.75); letter-spacing: 1px; }
+  #controls label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+  #controls label input { accent-color: #4ecdc4; }
+  #controls input[type=range] { width: 100%; accent-color: #4ecdc4; }
+  .row { display: flex; gap: 8px; }
+  button { flex: 1; background: rgba(78, 205, 196, 0.14); color: #cff5f2; border: 1px solid rgba(78, 205, 196, 0.4);
+    border-radius: 8px; padding: 6px 8px; font-size: 12px; cursor: pointer; transition: background .15s; }
+  button:hover { background: rgba(78, 205, 196, 0.28); }
+  #stats { left: 16px; bottom: 16px; font-size: 12px; opacity: .7; font-variant-numeric: tabular-nums; }
+  #tooltip { position: fixed; pointer-events: none; display: none; z-index: 30; max-width: 280px;
+    background: rgba(8, 13, 28, 0.92); border: 1px solid rgba(120, 160, 255, 0.35); padding: 6px 10px;
+    border-radius: 8px; font-size: 13px; box-shadow: 0 4px 18px rgba(0,0,0,.4); }
+  #infoCard { left: 16px; bottom: 62px; min-width: 224px; }
+  #infoCard.hidden { display: none; }
+  #infoName { font-size: 18px; font-weight: 700; }
+  #infoType { font-size: 12px; opacity: .72; margin-top: 3px; }
+  #infoId { font-size: 11px; opacity: .45; margin-top: 2px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #infoStat { font-size: 12px; opacity: .78; margin-top: 8px; }
+  .help { position: fixed; bottom: 16px; right: 16px; font-size: 11px; opacity: .5; text-align: right; z-index: 10; line-height: 1.7; }
+</style>
+</head>
+<body>
+<div id="viewport"></div>
+
+<div id="title" class="panel">3D 知识图谱 · 自顶向下层级渲染</div>
+
+<div id="legend" class="panel">
+  <h3>节点类型</h3>
+  <div id="legendItems"></div>
+</div>
+
+<div id="controls" class="panel">
+  <div class="group-title">视图控制</div>
+  <label><input type="checkbox" id="toggleRotate" checked> 自动旋转</label>
+  <label><input type="checkbox" id="toggleLabels" checked> 显示标签</label>
+  <div class="group-title" style="margin-top:2px">层级间距</div>
+  <input type="range" id="spacing" min="0" max="100" value="50">
+ <div class="row">
+   <button id="resetView">重置视角</button>
+    <button id="resetScene">重置画面</button>
+ </div>
+</div>
+
+<div id="stats" class="panel"></div>
+<div id="status" class="panel" style="display:none; left:50%; bottom:16px; transform:translateX(-50%); font-size:12px; max-width:70%; text-align:center;"></div>
+<div id="infoCard" class="panel hidden">
+  <div id="infoName"></div>
+  <div id="infoType"></div>
+  <div id="infoId"></div>
+  <div id="infoStat"></div>
+</div>
+<div id="tooltip"></div>
+<div class="help">拖拽 JSON 文件到窗口可加载自定义图谱<br>滚轮缩放 · 拖拽旋转 · 点击节点聚焦 · Esc 取消</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const $ = sel => document.querySelector(sel);
+
+const SAMPLE = {
+  // 后端不可用时的兜底：和 /v1/graph/kg 一致，只画 4 类主节点。
+  types: {
+    product:     { label: '配方',   color: '#ff6b6b' },
+    ingredient:  { label: '成分',   color: '#4ecdc4' },
+    healthtopic: { label: '健康主题', color: '#a78bfa' },
+    evidence:    { label: '循证证据', color: '#96ceb4' }
+  },
+  nodes: [
+    { id: 'p1', label: '复合维生素 B 群', type: 'product' },
+    { id: 'p2', label: 'Omega-3 鱼油',    type: 'product' },
+    { id: 'p3', label: '钙镁锌片',        type: 'product' },
+    { id: 'i1', label: '维生素 B6',  type: 'ingredient' },
+    { id: 'i2', label: '维生素 B12', type: 'ingredient' },
+    { id: 'i3', label: 'EPA',        type: 'ingredient' },
+    { id: 'i4', label: 'DHA',        type: 'ingredient' },
+    { id: 'i5', label: '钙',         type: 'ingredient' },
+    { id: 'i6', label: '镁',         type: 'ingredient' },
+    { id: 't1', label: '心血管健康', type: 'healthtopic' },
+    { id: 't2', label: '骨骼健康',   type: 'healthtopic' },
+    { id: 't3', label: '能量代谢',   type: 'healthtopic' },
+    { id: 'e1', label: 'B 群降低同型半胱氨酸 RCT', type: 'evidence' },
+    { id: 'e2', label: 'Omega-3 对血脂的 Meta 分析', type: 'evidence' },
+    { id: 'e3', label: '钙镁协同的骨密度队列',     type: 'evidence' }
+  ],
+  links: [
+    // Product - Ingredient (产品含成分)
+    ['p1','i1'], ['p1','i2'], ['p2','i3'], ['p2','i4'], ['p3','i5'], ['p3','i6'],
+    // Ingredient - Evidence (成分→论文, EVIDENCE_FOR)
+    ['i1','e1'], ['i2','e1'], ['i3','e2'], ['i4','e2'], ['i5','e3'], ['i6','e3'],
+    // Evidence - HealthTopic (论文→健康主题, SUPPORTS_TOPIC)
+    ['e1','t1'], ['e1','t3'], ['e2','t1'], ['e3','t2']
+  ].map(([source, target]) => ({ source, target }))
+};
+
+// 顶到底层级顺序（用户指定，2026-08-05）。
+// EvidenceContext 经两跳穿透后不再出现；Evidence 借助 EvidenceContext 桥接到
+// Ingredient 和 HealthTopic，因此 Evidence 居中于二者之间，形成 4 层链路：
+//   Product 配方 → Ingredient 成分 → Evidence 循证证据 → HealthTopic 健康主题
+// 任何不在表里的 type 会自动放到下一层（不挤占固定位置）。
+const TYPE_DEPTHS = {
+  Product: 0,
+  Ingredient: 1,
+  Evidence: 2,
+  HealthTopic: 3,
+};
+
+// 4 个固定 type 的稳定配色，避免 Neo4j 标签 hash 出近似色挤一起。
+const TYPE_COLORS = {
+  Product:     '#ff6b6b', // 红
+  Ingredient:  '#4ecdc4', // 青
+  HealthTopic: '#a78bfa', // 紫
+  Evidence:    '#96ceb4', // 鼠尾草
+};
+
+// 每层显式 ring 半径（不是 depth * spacing）：避免 Product (depth 0) 全部
+// 落到 r=0 挤成一个球；外层节点多时给足间距避免重叠。
+const LAYER_RADII = {
+  0: 6,    // Product (~100)     小环顶
+  1: 16,   // Ingredient (~406)  仅次于 Evidence 的密集层
+  2: 26,   // Evidence (~435)    最密集, 居中便于和左右两环都连线
+  3: 36,   // HealthTopic (~94)  最外环, 节点最少
+};
+
+// 每层球体大小：节点多 → 球小一点，避免同环上互相盖住
+const LAYER_SIZES = {
+  0: 1.0,   // Product
+  1: 0.65,  // Ingredient 节点多
+  2: 0.60,  // Evidence 节点最多, 最小
+  3: 0.80,  // HealthTopic 节点少, 大一些
+};
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+$('#viewport').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0f1e);
+scene.fog = new THREE.Fog(0x0a0f1e, 80, 170);
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 500);
+// 拉到能看到最外环 r=38 + 4 层环全貌。target 略偏中下，让上 2 层占视觉中心
+const INIT_POS = new THREE.Vector3(34, 16, 50);
+const INIT_TARGET = new THREE.Vector3(0, -12, 0);
+camera.position.copy(INIT_POS);
+
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.target.copy(INIT_TARGET);
+controls.autoRotate = true;
+controls.autoRotateSpeed = 1.1;
+controls.minDistance = 8;
+controls.maxDistance = 180;
+
+const viewParam = new URLSearchParams(location.search).get('view');
+if (viewParam === 'close') { camera.position.set(0, 13, 30); controls.autoRotate = false; }
+else if (viewParam === 'side') { camera.position.set(34, 6, 10); controls.autoRotate = false; }
+else if (viewParam === 'top') { camera.position.set(0.01, 42, 0.01); controls.autoRotate = false; }
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+dirLight.position.set(25, 45, 20);
+scene.add(dirLight);
+const pointLight = new THREE.PointLight(0x4ecdc4, 0.8, 130);
+pointLight.position.set(-22, 14, -22);
+scene.add(pointLight);
+
+const nodeGroup = new THREE.Group();
+const linkGroup = new THREE.Group();
+const labelGroup = new THREE.Group();
+const ringGroup = new THREE.Group();
+scene.add(nodeGroup, linkGroup, ringGroup, labelGroup);
+
+let currentData = null;
+let nodeMap = new Map();
+let linkObjs = [];
+let hoveredId = null;        // 鼠标悬停（临时高亮预览）
+let selectedId = null;       // 节点 id，仅用于 info card
+let pinnedId = null;         // 点击锁住的高亮（持续显示，相机不动）
+let focusMode = null;        // null | 'product' | 'reachable'
+let fly = null;
+const cfg = { layerSpacing: 6, ringSpacing: 8, showLabels: true };
+
+function typeColor(type, types) {
+  // 1) 用户给 5 种 Neo4j 标签分配的固定色
+  if (TYPE_COLORS[type]) return new THREE.Color(TYPE_COLORS[type]);
+  // 2) 数据里自定义 types（载入 JSON 时用）
+  const t = types[type];
+  if (t && t.color) return new THREE.Color(t.color);
+  // 3) 兜底 hash 色
+  const palette = ['#8d99ae', '#ef476f', '#06d6a0', '#118ab2', '#ffd166', '#b5838d'];
+  let h = 0;
+  for (const ch of String(type)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return new THREE.Color(palette[h % palette.length]);
+}
+function typeLabel(type, types) {
+  const t = types[type];
+  return t ? t.label : String(type);
+}
+
+function disposeGroup(g) {
+  while (g.children.length) {
+    const c = g.children.pop();
+    if (c.geometry) c.geometry.dispose();
+    const mats = Array.isArray(c.material) ? c.material : [c.material];
+    for (const m of mats) if (m && m.map) m.map.dispose();
+    for (const m of mats) if (m) m.dispose();
+  }
+}
+
+function makeLabelSprite(text, colorHex) {
+  const font = '600 42px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif';
+  const cvs = document.createElement('canvas');
+  const ctx = cvs.getContext('2d');
+  ctx.font = font;
+  const tw = ctx.measureText(text).width;
+  const pad = 26;
+  cvs.width = Math.ceil(tw + pad * 2);
+  cvs.height = 88;
+  const ctx2 = cvs.getContext('2d');
+  ctx2.font = font;
+  ctx2.textAlign = 'center';
+  ctx2.textBaseline = 'middle';
+  ctx2.lineWidth = 10;
+  ctx2.lineJoin = 'round';
+  ctx2.strokeStyle = 'rgba(4, 8, 18, 0.92)';
+  ctx2.strokeText(text, cvs.width / 2, 46);
+  ctx2.fillStyle = colorHex;
+  ctx2.fillText(text, cvs.width / 2, 46);
+  const tex = new THREE.CanvasTexture(cvs);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  const k = 0.115;
+  sp.scale.set((tw + pad * 2) / 42 * k, 88 / 42 * k, 1);
+  return sp;
+}
+
+function makeHalo(color) {
+  const size = 128;
+  const cvs = document.createElement('canvas');
+  cvs.width = cvs.height = size;
+  const ctx = cvs.getContext('2d');
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  g.addColorStop(0, 'rgba(255,255,255,0.5)');
+  g.addColorStop(0.35, 'rgba(255,255,255,0.16)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(cvs);
+  return new THREE.Sprite(new THREE.SpriteMaterial({
+    map: tex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, color
+  }));
+}
+
+function buildGraph(data) {
+  disposeGroup(nodeGroup); disposeGroup(linkGroup); disposeGroup(labelGroup); disposeGroup(ringGroup);
+  // 重新构图一律清掉 pin / hover（pin 节点可能已不在新图里）
+  pinnedId = null; hoveredId = null; selectedId = null; focusMode = null;
+  $('#infoCard').classList.add('hidden');
+  tooltip.style.display = 'none';
+  nodeMap = new Map(); linkObjs = [];
+
+  const types = Object.assign({}, SAMPLE.types, data.types || {});
+  const nodes = (data.nodes || []).map(n => ({
+    id: String(n.id ?? n.name ?? ''),
+    label: n.label ?? n.name ?? String(n.id),
+    type: n.type ?? 'default'
+  })).filter(n => n.id);
+  const links = (data.links || []).map(l => ({
+    a: typeof l.source === 'object' ? String(l.source.id ?? l.source.name) : String(l.source),
+    b: typeof l.target === 'object' ? String(l.target.id ?? l.target.name) : String(l.target)
+  }));
+
+  for (const n of nodes) {
+    if (!nodeMap.has(n.id)) nodeMap.set(n.id, { ...n, depth: 0, children: [], parents: [], angle: 0, size: 1 });
+  }
+  for (const l of links) {
+    const a = nodeMap.get(l.a), b = nodeMap.get(l.b);
+    if (!a || !b || a === b) continue;
+    a.children.push(l.b);
+    b.parents.push(l.a);
+  }
+
+  // 1) depth 直接按 TYPE_DEPTHS 排，未知 type 放最后（fallback 槽位递增）
+  let fallbackDepth = Object.keys(TYPE_DEPTHS).length;
+  for (const n of nodeMap.values()) {
+    n.depth = (n.type in TYPE_DEPTHS) ? TYPE_DEPTHS[n.type] : fallbackDepth++;
+  }
+
+  // 2) 同一层均匀分布角度（不再按 parent/child 拓扑递归）。
+  //    让 Product / Ingredient / HealthTopic / Evidence
+  //    各自成一个干净的水平环；层间关系由连线和 y 偏移串起来。
+  const byDepth = new Map();
+  for (const n of nodeMap.values()) {
+    if (!byDepth.has(n.depth)) byDepth.set(n.depth, []);
+    byDepth.get(n.depth).push(n);
+  }
+  // 稳定排序：先按 type 在 TYPE_DEPTHS 里的定义顺序，再按 label
+  for (const [, group] of byDepth) {
+    group.sort((a, b) => {
+      const ai = Object.keys(TYPE_DEPTHS).indexOf(a.type);
+      const bi = Object.keys(TYPE_DEPTHS).indexOf(b.type);
+      if (ai !== bi) return ai - bi;
+      return a.label.localeCompare(b.label);
+    });
+  }
+  for (const [depth, group] of byDepth) {
+    const n = group.length;
+    group.forEach((node, i) => {
+      node.angle = (i / n) * Math.PI * 2;
+    });
+  }
+
+  // 3) 把同深度的所有节点拉到同一条环上；每层 y 用 -depth * spacing
+  //    天然得到"自顶向下"的层叠。每层 ring 半径用 LAYER_RADII 显式
+  //    表，避免 depth=0 全部钉到原点。
+  const maxDepth = Math.max(0, ...byDepth.keys());
+  const ringRadii = new Map();
+  for (const n of nodeMap.values()) {
+    n.r = (LAYER_RADII[n.depth] != null)
+      ? LAYER_RADII[n.depth] * (cfg.ringSpacing / 8)  // 滑块缩放
+      : (n.depth + 0.7) * cfg.ringSpacing;
+    n.x = n.r * Math.cos(n.angle);
+    n.z = n.r * Math.sin(n.angle);
+    n.y = -n.depth * cfg.layerSpacing;
+    n.size = LAYER_SIZES[n.depth] != null
+      ? LAYER_SIZES[n.depth]
+      : 0.9;
+    ringRadii.set(n.depth, n.r);
+  }
+
+  for (let d = 0; d <= maxDepth; d++) {
+    const R = ringRadii.get(d) || (d + 0.7) * cfg.ringSpacing;
+    if (R < 0.5) continue;
+    const pts = [];
+    for (let i = 0; i <= 128; i++) {
+      const a = i / 128 * Math.PI * 2;
+      pts.push(new THREE.Vector3(R * Math.cos(a), -d * cfg.layerSpacing, R * Math.sin(a)));
+    }
+    const line = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({ color: 0x2c3a5e, transparent: true, opacity: 0.4 })
+    );
+    ringGroup.add(line);
+  }
+
+  for (const n of nodeMap.values()) {
+    const color = typeColor(n.type, types);
+    const geo = new THREE.SphereGeometry(n.size, 32, 24);
+    const mat = new THREE.MeshStandardMaterial({
+      color, roughness: 0.28, metalness: 0.12,
+      emissive: color.clone().multiplyScalar(0.35), emissiveIntensity: 1
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(n.x, n.y, n.z);
+    mesh.userData.nodeId = n.id;
+    mesh.scale.setScalar(0.0001);
+    n.mesh = mesh;
+    n.baseEmissive = mat.emissive.clone();
+    n.color = color;
+    n.birth = performance.now() + n.depth * 90;
+    nodeGroup.add(mesh);
+
+    // 点击 hitbox：透明球，固定 2.5× 节点尺寸；让小节点（Evidence 0.65、
+    // HealthTopic 0.75、Ingredient 0.70）也容易点中。visible 默认 true，
+    // 但 material opacity=0 + depthWrite=false 所以不渲染。
+    const hitGeo = new THREE.SphereGeometry(1, 12, 8);
+    const hitMat = new THREE.MeshBasicMaterial({
+      transparent: true, opacity: 0, depthWrite: false,
+    });
+    const hitbox = new THREE.Mesh(hitGeo, hitMat);
+    hitbox.scale.setScalar(Math.max(n.size * 2.5, 1.4));
+    hitbox.position.set(n.x, n.y, n.z);
+    hitbox.userData.nodeId = n.id;
+    hitbox.userData.isHitbox = true;
+    hitbox.renderOrder = -1;  // 先画（虽然看不见）
+    n.hitbox = hitbox;
+    nodeGroup.add(hitbox);
+
+    const halo = makeHalo(color);
+    halo.position.set(n.x, n.y, n.z);
+    halo.scale.setScalar(n.size * 3.4);
+    halo.userData.nodeId = n.id;
+    halo.userData.isHalo = true;
+    n.halo = halo;
+    nodeGroup.add(halo);
+
+    const label = makeLabelSprite(n.label, '#' + color.getHexString());
+    label.position.set(n.x, n.y + n.size * 2.15, n.z);
+    n.labelSprite = label;
+    n.labelAspect = label.scale.x / label.scale.y;
+    labelGroup.add(label);
+  }
+
+  for (const l of links) {
+    const a = nodeMap.get(l.a), b = nodeMap.get(l.b);
+    if (!a || !b) continue;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([a.x, a.y, a.z, b.x, b.y, b.z], 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute([
+      a.color.r, a.color.g, a.color.b, b.color.r, b.color.g, b.color.b
+    ], 3));
+    const mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.001 });
+    const line = new THREE.Line(geo, mat);
+    linkGroup.add(line);
+    linkObjs.push({ line, mat, birth: performance.now() + Math.max(a.depth, b.depth) * 90, a, b });
+  }
+
+  {
+    const maxD = nodeMap.size ? Math.max(0, ...nodeMap.values().map(n => n.depth)) : 0;
+    const typeSet = new Set([...nodeMap.values()].map(n => n.type));
+    $('#stats').textContent = `${nodeMap.size} 节点 · ${linkObjs.length} 条关系 · ${typeSet.size} 种类型 · ${maxD + 1} 层`;
+  }
+}
+
+// 中文 label（如果有就用，否则直接用 type 名）
+const TYPE_LABELS_CN = {
+  Product: '配方',
+  Ingredient: '成分',
+  HealthTopic: '健康主题',
+  Evidence: '循证证据',
+};
+
+function renderLegend(data) {
+  const types = Object.assign({}, SAMPLE.types, data.types || {});
+  const counts = {};
+  for (const n of data.nodes) counts[n.type ?? 'default'] = (counts[n.type ?? 'default'] || 0) + 1;
+  const el = $('#legendItems');
+  el.innerHTML = '';
+  // 固定 4 层顺序：先按 TYPE_DEPTHS，再追加未知 type
+  const order = Object.keys(TYPE_DEPTHS);
+  const extra = Object.keys(counts).filter(t => !order.includes(t)).sort();
+  const allOrdered = [...order, ...extra];
+  for (const t of allOrdered) {
+    const c = counts[t];
+    if (!c) continue;
+    const info = types[t];
+    const color = TYPE_COLORS[t] || (info && info.color) || '#' + typeColor(t, types).getHexString();
+    const label = TYPE_LABELS_CN[t] || (info && info.label) || t;
+    const item = document.createElement('div');
+    item.className = 'legend-item';
+    item.innerHTML = `<span class="dot" style="background:${color};box-shadow:0 0 8px ${color}"></span>` +
+      `<span>${label}</span><span class="legend-count">${c}</span>`;
+    el.appendChild(item);
+  }
+}
+
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2(-10, -10);
+const tooltip = $('#tooltip');
+
+window.addEventListener('pointermove', e => {
+  pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+  pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  tooltip.style.left = (e.clientX + 16) + 'px';
+  tooltip.style.top = (e.clientY + 16) + 'px';
+});
+
+function setHover(id) {
+  if (id === hoveredId) return;
+  hoveredId = id;
+  // tooltip 一直显示（pin 时也允许看 hover label），但视觉由动画循环按
+  // focus = pin || hover 统一算
+  if (id && nodeMap.has(id)) {
+    const h = nodeMap.get(id);
+    const types = Object.assign({}, SAMPLE.types, currentData?.types || {});
+    tooltip.textContent = `${h.label} · ${typeLabel(h.type, types)}`;
+    tooltip.style.display = 'block';
+  } else {
+    tooltip.style.display = 'none';
+  }
+}
+
+// 计算当前 focus：优先支持产品节点“只看本品及后代”；否则走 BFS 可达子图。
+// hover 不参与高亮决策（只显示 tooltip），Esc / 空白 click 稳定复位。
+function computeFocus() {
+  if (!pinnedId || !nodeMap.has(pinnedId)) return null;
+  const id = pinnedId;
+  const n = nodeMap.get(id);
+  if (focusMode === 'product' && n.type === 'Product') {
+    const relevant = new Set([id]);
+    const queue = [...n.children];
+    while (queue.length) {
+      const cur = queue.shift();
+      if (!relevant.add(cur)) continue;
+      const cn = nodeMap.get(cur);
+      if (cn) {
+        for (const child of cn.children) if (!relevant.has(child)) queue.push(child);
+      }
+    }
+    return { id, n, reachable: relevant, mode: 'product' };
+  }
+  const reachable = new Set([id]);
+  const queue = [id];
+  while (queue.length) {
+    const cur = queue.shift();
+    const cn = nodeMap.get(cur);
+    if (!cn) continue;
+    const nbrs = cn.parents.length < cn.children.length
+      ? [...cn.children, ...cn.parents]
+      : [...cn.parents, ...cn.children];
+    for (const nbr of nbrs) {
+      if (!reachable.has(nbr) && nodeMap.has(nbr)) {
+        reachable.add(nbr);
+        queue.push(nbr);
+      }
+    }
+  }
+  return { id, n, reachable, mode: 'reachable' };
+}
+
+function selectNode(id) {
+  // 不触发相机飞近，只锁住高亮 + 切 info card。
+  // 相机距离 / 位置完全由用户拖拽 / 滚轮控制。
+  // id=null 时也清掉 hover（Esc / 点空白 = 完整复位）
+  selectedId = id;
+  if (id && nodeMap.has(id)) {
+    pinnedId = id;
+    focusMode = nodeMap.get(id).type === 'Product' ? 'product' : 'reachable';
+  } else {
+    pinnedId = null;
+    focusMode = null;
+    hoveredId = null;
+    tooltip.style.display = 'none';
+  }
+  const card = $('#infoCard');
+  const types = Object.assign({}, SAMPLE.types, currentData?.types || {});
+  if (!id || !nodeMap.has(id)) {
+    card.classList.add('hidden');
+    return;
+  }
+  const n = nodeMap.get(id);
+  $('#infoName').textContent = n.label;
+  $('#infoName').style.color = '#' + n.color.getHexString();
+  $('#infoType').textContent = `类型：${typeLabel(n.type, types)}`;
+  $('#infoId').textContent = `id: ${n.id}`;
+  $('#infoStat').textContent = `${n.children.length} 个子节点 · ${n.parents.length} 个父节点 · 深度 ${n.depth}`;
+  card.classList.remove('hidden');
+}
+
+function pickNodeId() {
+  raycaster.setFromCamera(pointer, camera);
+  // 优先优先命中真正的网格，再回退到不可见的 hitbox，减小误触。
+  const meshHits = raycaster.intersectObjects(nodeGroup.children.filter(o => o.userData.nodeId && !o.userData.isHitbox), false);
+  const hit = meshHits.find(h => h.object.userData.nodeId);
+  if (hit) return hit.object.userData.nodeId;
+  const hitboxHits = raycaster.intersectObjects(nodeGroup.children.filter(o => o.userData.isHitbox), false);
+  return hitboxHits[0]?.object.userData.nodeId || null;
+}
+
+renderer.domElement.addEventListener('click', () => {
+  // 点击节点才选中；点空白处不执行任何逻辑（复位改由「重置画面」按钮接管）
+  const id = pickNodeId();
+  if (id) selectNode(id);
+});
+window.addEventListener('keydown', e => { if (e.key === 'Escape') selectNode(null); });
+
+const easeOutBack = t => {
+  const c1 = 1.70158, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+};
+const easeInOutCubic = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const now = performance.now();
+  // 高亮策略（click 节点 → 整张可达子图亮起，其它全部隐藏）：
+  //   focus.reachable  → 节点 + halo + label 可见，emissive 保持原色
+  //   focus 自身       → 额外 emissive 白色 + 1.18× scale
+  //   不在 reachable    → mesh.visible / halo.visible / label.visible = false
+  //   边两端都在 reachable → opacity 1.0；否则 0
+  const focus = computeFocus();
+  const reachable = focus ? focus.reachable : null;
+  const isProductFocus = focus && focus.mode === 'product';
+  const showAllLinesWhenProductFocus = currentData?.showAllLinesWhenProductFocus === true;
+  // 实时 stats：focus 变化时显示子图规模
+  if (focus) {
+    {
+    const maxD = nodeMap.size ? Math.max(0, ...nodeMap.values().map(n => n.depth)) : 0;
+    const typeSet = new Set([...nodeMap.values()].map(n => n.type));
+    const label = isProductFocus ? `产品子图 ${reachable.size} 节点` : `高亮子图 ${reachable.size} 节点`;
+    $('#stats').textContent = `${nodeMap.size} 节点 · ${linkObjs.length} 条关系 · ${typeSet.size} 种类型 · ${maxD + 1} 层 · ${label}`;
+  }
+  } else if ($('#stats').textContent.includes('子图')) {
+    // 复位时去掉子图统计
+    {
+    const maxD = nodeMap.size ? Math.max(0, ...nodeMap.values().map(n => n.depth)) : 0;
+    const typeSet = new Set([...nodeMap.values()].map(n => n.type));
+    $('#stats').textContent = `${nodeMap.size} 节点 · ${linkObjs.length} 条关系 · ${typeSet.size} 种类型 · ${maxD + 1} 层`;
+  }
+  }
+  for (const n of nodeMap.values()) {
+    const age = (now - n.birth) / 500;
+    const birthScale = age < 1 ? easeOutBack(Math.min(1, age)) : 1;
+    const visible = !focus || reachable.has(n.id);
+    if (visible) {
+      if (focus && n.id === focus.id) {
+        // 焦点：白 emissive + 放大 1.18×
+        n.mesh.visible = true;
+        n.mesh.material.emissive.setRGB(1, 1, 1);
+        n.mesh.scale.setScalar(n.size * birthScale * 1.18);
+      } else {
+        n.mesh.visible = true;
+        n.mesh.material.emissive.copy(n.baseEmissive);
+        n.mesh.scale.setScalar(n.size * birthScale);
+      }
+    } else {
+      // 不可见：mesh / halo / label / hitbox 全部隐藏
+      n.mesh.visible = false;
+      n.halo.visible = false;
+      n.labelSprite.visible = false;
+      if (n.hitbox) n.hitbox.visible = false;
+      continue;
+    }
+    n.halo.visible = true;
+    if (n.hitbox) n.hitbox.visible = true;
+    n.labelSprite.visible = cfg.showLabels;
+    n.halo.scale.setScalar(n.size * (3.4 + Math.sin(now * 0.002 + n.depth) * 0.25));
+    if (cfg.showLabels) {
+      const dist = camera.position.distanceTo(n.mesh.position);
+      const worldH = (2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5))) / renderer.domElement.clientHeight * 26;
+      n.labelSprite.scale.set(worldH * n.labelAspect, worldH, 1);
+    }
+  }
+  for (const l of linkObjs) {
+    const age = (now - l.birth) / 400;
+    let target = 0;
+    if (!focus) {
+      target = 1;
+    } else if (isProductFocus && showAllLinesWhenProductFocus) {
+      target = reachable.has(l.a.id) || reachable.has(l.b.id) ? 1 : 0;
+    } else {
+      target = reachable.has(l.a.id) && reachable.has(l.b.id) ? 1 : 0;
+    }
+    const visible = target > 0;
+    l.mat.opacity = age < 1 ? target * Math.min(1, age) : target;
+    l.line.visible = visible;
+  }
+  if (fly) {
+    fly.t = Math.min(1, fly.t + dt / 1.1);
+    const e = easeInOutCubic(fly.t);
+    camera.position.lerpVectors(fly.from, fly.to, e);
+    controls.target.lerpVectors(fly.cFrom, fly.cTo, e);
+    if (fly.t >= 1) fly = null;
+  }
+  raycaster.setFromCamera(pointer, camera);
+  const hits = raycaster.intersectObjects(nodeGroup.children, false);
+  const hit = hits.find(h => h.object.userData.nodeId);
+  setHover(hit ? hit.object.userData.nodeId : null);
+  controls.update();
+  renderer.render(scene, camera);
+});
+
+function loadJSON(text) {
+  try {
+    const data = JSON.parse(text);
+    if (!Array.isArray(data.nodes) || !Array.isArray(data.links)) throw new Error('bad format');
+    currentData = data;
+    pinnedId = null; focusMode = null; hoveredId = null;  // 切图必清高亮
+    $('#infoCard').classList.add('hidden');
+    buildGraph(data);
+    renderLegend(data);
+  } catch (err) {
+    alert('JSON 格式不正确：需要 { nodes: [{ id, label, type }], links: [{ source, target }] }');
+  }
+}
+
+$('#toggleRotate').addEventListener('change', e => { controls.autoRotate = e.target.checked; });
+$('#toggleLabels').addEventListener('change', e => { cfg.showLabels = e.target.checked; labelGroup.visible = cfg.showLabels; });
+$('#spacing').addEventListener('input', e => {
+  const v = +e.target.value;
+  cfg.layerSpacing = 3 + v / 100 * 6;
+  cfg.ringSpacing = 4 + v / 100 * 8;
+  if (currentData) buildGraph(currentData);
+});
+$('#resetView').addEventListener('click', () => {
+  fly = { t: 0, from: camera.position.clone(), to: INIT_POS.clone(), cFrom: controls.target.clone(), cTo: INIT_TARGET.clone() };
+});
+$('#resetScene').addEventListener('click', () => {
+  // 接管原"点击空白处"的复位逻辑：清 pin/focus/hover + 关闭 info card
+  selectNode(null);
+});
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', e => {
+  e.preventDefault();
+  const f = [...(e.dataTransfer?.files || [])].find(x => x.name.endsWith('.json') || x.type.includes('json'));
+  if (f) f.text().then(loadJSON);
+});
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+const qParams = new URLSearchParams(location.search);
+const statusEl = $('#status');
+function showStatus(msg, color) {
+  statusEl.textContent = msg;
+  statusEl.style.color = color || '#e6ecff';
+  statusEl.style.display = 'block';
+  clearTimeout(showStatus._t);
+  showStatus._t = setTimeout(() => { statusEl.style.display = 'none'; }, 9000);
+}
+
+const API_URL = (qParams.get('api') || '').replace(/\/+$/, '') + '/v1/graph/kg';
+
+async function loadFromAPI() {
+  showStatus('正在从后端加载图谱…', '#4ecdc4');
+  try {
+    const resp = await fetch(API_URL, { headers: { Accept: 'application/json' } });
+    let body = null;
+    try { body = await resp.json(); } catch { /* keep null */ }
+    const data = body && body.code === 0 ? body.data : null;
+    if (!data || !Array.isArray(data.nodes) || !Array.isArray(data.links)) {
+      throw new Error((body && body.msg) || `后端返回异常（HTTP ${resp.status}）`);
+    }
+    currentData = data;
+    buildGraph(data);
+    renderLegend(data);
+    showStatus(`已从后端加载 ${data.nodes.length} 节点 / ${data.links.length} 关系`, '#7ae0c3');
+  } catch (err) {
+    showStatus(`后端加载失败（${err.message}），展示内置示例数据`, '#ff9f6b');
+    currentData = SAMPLE;
+    buildGraph(SAMPLE);
+    renderLegend(SAMPLE);
+  }
+}
+const dataParam = qParams.get('data');
+if (dataParam) {
+  fetch(dataParam).then(r => r.text()).then(loadJSON).catch(() => {});
+} else {
+  loadFromAPI();
+}
+</script>
+</body>
+</html>

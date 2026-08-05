@@ -1,0 +1,104 @@
+openapi: 3.1.0
+info:
+  title: kg-viewer API
+  version: 1.0.0
+  description: |
+    3D knowledge-graph viewer service. Reads graph snapshots from Neo4j
+    and serves them to an embedded Three.js visualization page.
+servers:
+  - url: http://localhost:8090
+    description: Local development
+tags:
+  - name: Graph
+    description: Knowledge-graph snapshot for the 3D KG viewer (Neo4j-backed).
+paths:
+  /v1/graph/kg:
+    get:
+      tags: [Graph]
+      operationId: graphKG
+      summary: 获取知识图谱节点与关系（3D 可视化数据源）
+      description: |
+        从 Neo4j 读取图谱快照（节点 + 关系），供 /kg-viewer 3D 渲染使用。
+        固定返回 4 类节点：Product / Ingredient / Evidence / HealthTopic。
+        EvidenceContext 作为隐式桥(不出现)两跳穿透，使 Evidence 居于
+        Ingredient 与 HealthTopic 之间(Product→Ingredient→Evidence→HealthTopic)。
+        未传 limit 时返回全量关系；显式传 limit 则每个 UNION 分支独立采样。
+        未配置 Neo4j 时返回 503；Neo4j 查询失败返回 502。
+      security: []
+      parameters:
+        - in: query
+          name: limit
+          description: 单关系类型采样上限（可选，不传=全量返回）
+          schema: { type: integer, minimum: 1 }
+        - in: query
+          name: label
+          description: 按节点标签过滤（如 Ingredient），空为全图
+          schema: { type: string }
+      responses:
+        '200':
+          description: 图谱快照
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EnvelopeKnowledgeGraph' }
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+components:
+  responses:
+    BadGateway:
+      description: 上游服务（如 Neo4j）查询失败
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ServiceUnavailable:
+      description: Neo4j 未配置
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Envelope:
+      type: object
+      required: [code]
+      properties:
+        code: { type: integer, example: 0 }
+        msg: { type: string }
+    EnvelopeKnowledgeGraph:
+      allOf:
+        - $ref: '#/components/schemas/Envelope'
+        - type: object
+          properties:
+            data: { $ref: '#/components/schemas/KnowledgeGraph' }
+    KnowledgeGraph:
+      type: object
+      required: [nodes, links, source]
+      properties:
+        nodes:
+          type: array
+          items: { $ref: '#/components/schemas/GraphNode' }
+        links:
+          type: array
+          items: { $ref: '#/components/schemas/GraphLink' }
+        source:
+          type: string
+          example: neo4j
+    GraphNode:
+      type: object
+      required: [id, label, type]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        type: { type: string }
+    GraphLink:
+      type: object
+      required: [source, target]
+      properties:
+        source: { type: string }
+        target: { type: string }
+        type: { type: string }
+    Error:
+      type: object
+      required: [code, msg]
+      properties:
+        code: { type: integer }
+        msg: { type: string }
