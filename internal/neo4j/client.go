@@ -1,5 +1,7 @@
 // Package neo4j provides a thin read-only client that snapshots a
 // knowledge graph (nodes + relationships) for the 3D viewer API.
+// It supports both English-labeled (:7687) and Chinese-labeled (:7688)
+// Neo4j databases via LabelSet.
 package neo4j
 
 import (
@@ -9,6 +11,39 @@ import (
 
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 )
+
+// LabelSet maps the semantic roles used in the Cypher query to actual
+// Neo4j label names. EnglishLabels for :7687, ChineseLabels for :7688.
+type LabelSet struct {
+	EvidenceContext string // EN: "EvidenceContext"  ZH: "证据上下文"
+	Evidence        string // EN: "Evidence"          ZH: "循证证据"
+	HealthTopic     string // EN: "HealthTopic"       ZH: "健康结局"
+}
+
+// EnglishLabels targets the M3 :7687 database (nutrition-evidence-kg).
+var EnglishLabels = LabelSet{
+	EvidenceContext: "EvidenceContext",
+	Evidence:        "Evidence",
+	HealthTopic:     "HealthTopic",
+}
+
+// ChineseLabels targets the M3 :7688 database (nutrition-evidence-kg-zh).
+var ChineseLabels = LabelSet{
+	EvidenceContext: "证据上下文",
+	Evidence:        "循证证据",
+	HealthTopic:     "健康结局",
+}
+
+// chineseToEnglish normalises Chinese labels to the canonical English
+// type names the viewer expects (TYPE_DEPTHS / TYPE_COLORS etc.).
+var chineseToEnglish = map[string]string{
+	"配方":       "Product",
+	"成分":       "Ingredient",
+	"循证证据":     "Evidence",
+	"健康结局":     "HealthTopic",
+	"证据上下文":    "EvidenceContext",
+	"证据层级":     "EvidenceLayer",
+}
 
 // GraphNode is a node as exposed by GET /v1/graph/kg (matches the
 // payload shape consumed by the 3D viewer).
@@ -48,10 +83,12 @@ type Options struct {
 type Client struct {
 	driver neo4j.DriverWithContext
 	db     string
+	labels LabelSet
 }
 
-// NewClient opens a driver and verifies connectivity.
-func NewClient(ctx context.Context, uri, user, password, database string) (*Client, error) {
+// NewClient opens a driver and verifies connectivity. labels selects
+// the label schema (EnglishLabels or ChineseLabels).
+func NewClient(ctx context.Context, uri, user, password, database string, labels LabelSet) (*Client, error) {
 	drv, err := neo4j.NewDriverWithContext(uri, neo4j.BasicAuth(user, password, ""))
 	if err != nil {
 		return nil, fmt.Errorf("neo4j driver: %w", err)
@@ -60,7 +97,7 @@ func NewClient(ctx context.Context, uri, user, password, database string) (*Clie
 		_ = drv.Close(ctx)
 		return nil, fmt.Errorf("neo4j connectivity: %w", err)
 	}
-	return &Client{driver: drv, db: database}, nil
+	return &Client{driver: drv, db: database, labels: labels}, nil
 }
 
 // Close releases the underlying driver.
@@ -75,28 +112,31 @@ func (c *Client) Close(ctx context.Context) error { return c.driver.Close(ctx) }
 //	Evidence   -(EvidenceContext)- HealthTopic (SUPPORTS_TOPIC)
 //
 // so Evidence sits visually *between* Ingredient and HealthTopic
-// (Product → Ingredient → Evidence → HealthTopic). Direct edges among
+// (Product -> Ingredient -> Evidence -> HealthTopic). Direct edges among
 // the 4 types are returned verbatim. Per-node label resolution happens
 // in Go so we can handle long titles and label-specific properties
 // (canonical_name for Ingredient, name for Product, etc.). When Limit >
 // 0 each UNION branch is independently sampled (useful for ad-hoc curl
-// debugging); Limit <= 0 returns everything.
+// debugging); Limit <= 0 returns everything. Label names are taken from
+// c.labels so both English (:7687) and Chinese (:7688) databases work.
 func (c *Client) Fetch(ctx context.Context, opts Options) (*KnowledgeGraph, error) {
 	// UNION 三分支:每行返回 (anode, bnode, rt),Go 端多行循环去重。
 	// Limit > 0 时每分支加 LIMIT(整数拼接,安全无注入)。
+	// 标签名通过 fmt 拼入(来自 LabelSet 硬编码,非用户输入,无注入风险)。
 	limitClause := ""
 	if opts.Limit > 0 {
 		limitClause = fmt.Sprintf(" LIMIT %d", opts.Limit)
 	}
+	L := c.labels
 	labelProps := []string{
 		"canonical_name", // Ingredient
-		"name",            // Product / HealthTopic
-		"title",           // Evidence
-		"label",           // generic
-		"topic_id",        // HealthTopic fallback
-		"evidence_id",     // Evidence fallback
-		"product_id",      // Product fallback
-		"ingredient_id",   // Ingredient fallback
+		"name",           // Product / HealthTopic
+		"title",          // Evidence
+		"label",          // generic
+		"topic_id",       // HealthTopic fallback
+		"evidence_id",    // Evidence fallback
+		"product_id",     // Product fallback
+		"ingredient_id",  // Ingredient fallback
 	}
 	// nodeProj 把一个节点展开成 label-resolution 用的 map。
 	nodeProj := func(varName string) string {
@@ -114,29 +154,33 @@ func (c *Client) Fetch(ctx context.Context, opts Options) (*KnowledgeGraph, erro
     idn: id(%[1]s)
   }`, varName)
 	}
-	_ = nodeProj // 见下方 Sprintf
 	query := fmt.Sprintf(`
 // 分支 1:4 类节点间的直连边(排除 EvidenceContext)
 MATCH (a)-[r]->(b)
-WHERE NOT 'EvidenceContext' IN labels(a) AND NOT 'EvidenceContext' IN labels(b)
+WHERE NOT '%[1]s' IN labels(a) AND NOT '%[1]s' IN labels(b)
   AND ($label = '' OR $label IN labels(a) OR $label IN labels(b))
-RETURN %[1]s AS anode, %[2]s AS bnode, type(r) AS rt%[3]s
+RETURN %[2]s AS anode, %[3]s AS bnode, type(r) AS rt%[4]s
 UNION ALL
 // 分支 2:Ingredient -(EC)- Evidence  (EVIDENCE_FOR)
-MATCH (ing)-[]-(ec1:EvidenceContext)-[]-(ev:Evidence)
-WHERE ing <> ev AND NOT 'EvidenceContext' IN labels(ing)
+MATCH (ing)-[]-(ec1)-[]-(ev)
+WHERE '%[1]s' IN labels(ec1) AND '%[5]s' IN labels(ev)
+  AND ing <> ev AND NOT '%[1]s' IN labels(ing)
   AND ($label = '' OR $label IN labels(ing) OR $label IN labels(ev))
-RETURN %[4]s AS anode, %[5]s AS bnode, 'EVIDENCE_FOR' AS rt%[3]s
+RETURN %[6]s AS anode, %[7]s AS bnode, 'EVIDENCE_FOR' AS rt%[4]s
 UNION ALL
 // 分支 3:Evidence -(EC)- HealthTopic  (SUPPORTS_TOPIC)
-MATCH (ev2:Evidence)-[]-(ec2:EvidenceContext)-[]-(ht:HealthTopic)
-WHERE ev2 <> ht
+MATCH (ev2)-[]-(ec2)-[]-(ht)
+WHERE '%[5]s' IN labels(ev2) AND '%[1]s' IN labels(ec2) AND '%[8]s' IN labels(ht)
+  AND ev2 <> ht
   AND ($label = '' OR $label IN labels(ev2) OR $label IN labels(ht))
-RETURN %[6]s AS anode, %[7]s AS bnode, 'SUPPORTS_TOPIC' AS rt%[3]s
+RETURN %[9]s AS anode, %[10]s AS bnode, 'SUPPORTS_TOPIC' AS rt%[4]s
 `,
-		nodeProj("a"), nodeProj("b"), limitClause,
-		nodeProj("ing"), nodeProj("ev"),
-		nodeProj("ev2"), nodeProj("ht"),
+		L.EvidenceContext,                              // %[1]s
+		nodeProj("a"), nodeProj("b"), limitClause,     // %[2]s %[3]s %[4]s
+		L.Evidence,                                    // %[5]s
+		nodeProj("ing"), nodeProj("ev"),               // %[6]s %[7]s
+		L.HealthTopic,                                 // %[8]s
+		nodeProj("ev2"), nodeProj("ht"),               // %[9]s %[10]s
 	)
 
 	sess := c.driver.NewSession(ctx, neo4j.SessionConfig{
@@ -163,6 +207,11 @@ RETURN %[6]s AS anode, %[7]s AS bnode, 'SUPPORTS_TOPIC' AS rt%[3]s
 		}
 		seenNode[id] = true
 		typ := str(m["type"])
+		// Normalise Chinese labels to canonical English type names so
+		// the viewer's TYPE_DEPTHS / TYPE_COLORS match up.
+		if en, ok := chineseToEnglish[typ]; ok {
+			typ = en
+		}
 		if typ == "" {
 			typ = "node"
 		}

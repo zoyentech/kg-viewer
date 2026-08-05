@@ -25,8 +25,13 @@ func main() {
 	// to built-in sample data.
 	var graphLoader handler.GraphLoader
 	if cfg.Neo4jURI != "" {
+		labels := neo4j.EnglishLabels
+		if cfg.IsChinese() {
+			labels = neo4j.ChineseLabels
+			log.Infof("Using Chinese label schema (DB_LANG=zh)")
+		}
 		nclient, err := neo4j.NewClient(
-			context.Background(), cfg.Neo4jURI, cfg.Neo4jUser, cfg.Neo4jPassword, cfg.Neo4jDatabase)
+			context.Background(), cfg.Neo4jURI, cfg.Neo4jUser, cfg.Neo4jPassword, cfg.Neo4jDatabase, labels)
 		if err != nil {
 			log.Fatalf("neo4j: %v", err)
 		}

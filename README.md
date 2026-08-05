@@ -29,11 +29,29 @@ make neo4j-seed
 `.env` 中配置连接信息（留空 `NEO4J_URI` 则 `/v1/graph/kg` 返回 503，
 3D 页面自动回退内置示例数据）：
 
+场景 A — 本地 Docker 示例：
 ```bash
 NEO4J_URI=bolt://127.0.0.1:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=neo4j-healthdinner-2026
 NEO4J_DATABASE=neo4j
+```
+
+场景 B1 — M3 英文标签库（Product / Ingredient / Evidence / HealthTopic）：
+```bash
+NEO4J_URI=bolt://192.168.31.201:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=neo4j-healthdinner-2026
+NEO4J_DATABASE=neo4j
+```
+
+场景 B2 — M3 中文标签库（配方 / 成分 / 循证证据 / 健康结局）：
+```bash
+NEO4J_URI=bolt://192.168.31.201:7688
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=neo4j-healthdinner-2026
+NEO4J_DATABASE=neo4j
+DB_LANG=zh
 ```
 
 ## API
