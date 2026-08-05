@@ -34,7 +34,7 @@ neo4j-down:
 	docker compose -f $(NEO4J_DEPLOY)/docker-compose.yml down
 
 neo4j-seed:
-	docker compose -f $(NEO4J_DEPLOY)/docker-compose.yml exec -T neo4j cypher-shell -u neo4j -p healthdinner123 -f /seeds/seed.cypher
+	docker compose -f $(NEO4J_DEPLOY)/docker-compose.yml exec -T neo4j cypher-shell -u neo4j -p neo4j-healthdinner-2026 -f /seeds/seed.cypher
 
 neo4j-logs:
 	docker compose -f $(NEO4J_DEPLOY)/docker-compose.yml logs -f

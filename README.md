@@ -23,7 +23,7 @@ make neo4j-up
 # 灌入示例营养知识图谱（幂等）
 make neo4j-seed
 
-# 浏览器管理台 http://localhost:7474 (neo4j / healthdinner123)
+# 浏览器管理台 http://localhost:7474 (neo4j / neo4j-healthdinner-2026)
 ```
 
 `.env` 中配置连接信息（留空 `NEO4J_URI` 则 `/v1/graph/kg` 返回 503，
@@ -32,7 +32,7 @@ make neo4j-seed
 ```bash
 NEO4J_URI=bolt://127.0.0.1:7687
 NEO4J_USER=neo4j
-NEO4J_PASSWORD=healthdinner123
+NEO4J_PASSWORD=neo4j-healthdinner-2026
 NEO4J_DATABASE=neo4j
 ```
 

@@ -43,7 +43,7 @@ make neo4j-logs      # 跟日志
 make neo4j-down      # 停容器
 ```
 
-浏览器管理台：<http://localhost:7474>（`neo4j` / `healthdinner123`）。
+浏览器管理台：<http://localhost:7474>（`neo4j` / `neo4j-healthdinner-2026`）。
 
 ## 后端 env
 
@@ -52,7 +52,7 @@ make neo4j-down      # 停容器
 ```bash
 NEO4J_URI=bolt://127.0.0.1:7687
 NEO4J_USER=neo4j
-NEO4J_PASSWORD=healthdinner123
+NEO4J_PASSWORD=neo4j-healthdinner-2026
 NEO4J_DATABASE=neo4j
 ```
 
