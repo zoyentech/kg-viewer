@@ -739,11 +739,15 @@ async function fetchNodeDetail(id) {
 
 function pickNodeId() {
   raycaster.setFromCamera(pointer, camera);
-  // 优先优先命中真正的网格，再回退到不可见的 hitbox，减小误触。
-  const meshHits = raycaster.intersectObjects(nodeGroup.children.filter(o => o.userData.nodeId && !o.userData.isHitbox), false);
+  // 优先命中真正的网格，再回退到不可见的 hitbox，减小误触。
+  // Three.js Raycaster.intersectObjects() 不检查 object.visible —— focus 模式下
+  // 隐藏的节点 / hitbox 必须自己过滤掉，否则会"穿透点击"到 lineage 外的暗区。
+  const meshHits = raycaster.intersectObjects(
+    nodeGroup.children.filter(o => o.visible && o.userData.nodeId && !o.userData.isHitbox), false);
   const hit = meshHits.find(h => h.object.userData.nodeId);
   if (hit) return hit.object.userData.nodeId;
-  const hitboxHits = raycaster.intersectObjects(nodeGroup.children.filter(o => o.userData.isHitbox), false);
+  const hitboxHits = raycaster.intersectObjects(
+    nodeGroup.children.filter(o => o.visible && o.userData.isHitbox), false);
   return hitboxHits[0]?.object.userData.nodeId || null;
 }
 
@@ -840,7 +844,10 @@ renderer.setAnimationLoop(() => {
     if (fly.t >= 1) fly = null;
   }
   raycaster.setFromCamera(pointer, camera);
-  const hits = raycaster.intersectObjects(nodeGroup.children, false);
+  // 同 pickNodeId()：Three.js Raycaster 不查 object.visible，必须自己过滤，
+  // 否则 hover tooltip 会在 focus 暗区上冒出来，造成"看似选中隐藏节点"的错觉。
+  const hits = raycaster.intersectObjects(
+    nodeGroup.children.filter(o => o.visible), false);
   const hit = hits.find(h => h.object.userData.nodeId);
   setHover(hit ? hit.object.userData.nodeId : null);
   controls.update();

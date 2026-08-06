@@ -35,6 +35,12 @@ func TestHandler_ServesEmbeddedHTML(t *testing.T) {
 		"function pickNodeId()",      // click raycast path is wired up
 		"Product: 0,",                // 4-layer: Product → Ingredient → Evidence → HealthTopic
 		"Evidence: 2,",               // Evidence 居中（介于 Ingredient 和 HealthTopic 之间）
+		// picking 必须自己按 o.visible 过滤：
+		//   Three.js Raycaster.intersectObjects() 不检查 object.visible，
+		//   focus 模式下隐藏的节点 / hitbox 若不过滤，点击会"穿透"到 lineage 外的暗区。
+		"o.visible && o.userData.nodeId && !o.userData.isHitbox", // pickNodeId() 网格过滤
+		"o.visible && o.userData.isHitbox",                      // pickNodeId() hitbox 过滤
+		"o.visible), false",                                     // 动画循环 hover 过滤
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("viewer page missing %q", want)
@@ -46,6 +52,10 @@ func TestHandler_ServesEmbeddedHTML(t *testing.T) {
 		"EvidenceContext: 1,",
 		"EvidenceContext: '#ffd166'",
 		"evidencecontext 文献检索",
+		// 防止有人"优化"成不带 visible 过滤的版本（会让 lineage 暗区被穿透点击）
+		"nodeGroup.children.filter(o => o.userData.nodeId && !o.userData.isHitbox), false",
+		"nodeGroup.children.filter(o => o.userData.isHitbox), false",
+		"raycaster.intersectObjects(nodeGroup.children, false)",
 	} {
 		if strings.Contains(body, banned) {
 			t.Fatalf("viewer page must not reference %q (4-type filter regression)", banned)
