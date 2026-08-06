@@ -19,11 +19,18 @@
   .legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; }
   .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
   .legend-count { margin-left: auto; opacity: .55; font-size: 12px; font-variant-numeric: tabular-nums; }
-  #controls { left: 16px; top: 16px; width: 216px; display: flex; flex-direction: column; gap: 9px; }
+  #controls { left: 16px; top: 16px; width: 240px; display: flex; flex-direction: column; gap: 9px; }
   #controls .group-title { font-size: 12px; color: rgba(230,236,255,.75); letter-spacing: 1px; }
   #controls label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
   #controls label input { accent-color: #4ecdc4; }
   #controls input[type=range] { width: 100%; accent-color: #4ecdc4; }
+  /* 调试用的 4 个滑块:标签/数值一行,滑块另一行 */
+  #controls .slider-row { display: flex; flex-direction: column; gap: 2px; cursor: default; }
+  #controls .slider-row .slider-label { display: flex; justify-content: space-between; font-size: 12px; }
+  #controls .slider-row .slider-val { font-size: 11px; opacity: .7; font-variant-numeric: tabular-nums; }
+  /* dev 布局调试滑块:默认隐藏,?dev=1 或按 D 键显示;display:contents 让子项融入 flex 布局 */
+  #controls .dev-only { display: none; }
+  #controls .dev-only.visible { display: contents; }
   .row { display: flex; gap: 8px; }
   button { flex: 1; background: rgba(78, 205, 196, 0.14); color: #cff5f2; border: 1px solid rgba(78, 205, 196, 0.4);
     border-radius: 8px; padding: 6px 8px; font-size: 12px; cursor: pointer; transition: background .15s; }
@@ -103,12 +110,46 @@
   <div class="group-title">视图控制</div>
   <label><input type="checkbox" id="toggleRotate" checked> 自动旋转</label>
   <label><input type="checkbox" id="toggleLabels" checked> 显示标签</label>
-  <div class="group-title" style="margin-top:2px">层级间距</div>
-  <input type="range" id="spacing" min="0" max="100" value="50">
- <div class="row">
-   <button id="resetView">重置视角</button>
+
+  <div class="group-title" style="margin-top:6px">视野</div>
+  <div class="slider-row">
+    <div class="slider-label">视野距离 <span id="cameraRadiusVal" class="slider-val">80</span></div>
+    <input type="range" id="cameraRadius" min="10" max="180" step="1" value="80">
+  </div>
+
+  <!-- dev 布局调试滑块:默认隐藏。?dev=1 或运行中按 D 键切换显示 -->
+  <div id="devControls" class="dev-only">
+    <div class="group-title" style="margin-top:6px">层级布局（dev）</div>
+    <div class="slider-row">
+      <div class="slider-label">层级间距 (Y) <span id="layerSpacingVal" class="slider-val">10.0</span></div>
+      <input type="range" id="layerSpacing" min="1" max="15" step="0.5" value="10">
+    </div>
+    <div class="slider-row">
+      <div class="slider-label">配方 环半径 (depth 0) <span id="ringRadius0Val" class="slider-val">10.0</span></div>
+      <input type="range" id="ringRadius0" min="1" max="80" step="0.5" value="10">
+    </div>
+    <div class="slider-row">
+      <div class="slider-label">成分 环半径 (depth 1) <span id="ringRadius1Val" class="slider-val">20.0</span></div>
+      <input type="range" id="ringRadius1" min="1" max="80" step="0.5" value="20">
+    </div>
+    <div class="slider-row">
+      <div class="slider-label">循证证据 环半径 (depth 2) <span id="ringRadius2Val" class="slider-val">30.0</span></div>
+      <input type="range" id="ringRadius2" min="1" max="80" step="0.5" value="30">
+    </div>
+    <div class="slider-row">
+      <div class="slider-label">健康结局 环半径 (depth 3) <span id="ringRadius3Val" class="slider-val">40.0</span></div>
+      <input type="range" id="ringRadius3" min="1" max="80" step="0.5" value="40">
+    </div>
+    <div class="slider-row">
+      <div class="slider-label">节点群 Y 偏移（初始加载位置） <span id="graphOffsetYVal" class="slider-val">12.0</span></div>
+      <input type="range" id="graphOffsetY" min="-30" max="30" step="0.5" value="12">
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:4px">
+    <button id="resetView">重置视角</button>
     <button id="resetScene">重置画面</button>
- </div>
+  </div>
 </div>
 
 <div id="stats" class="panel"></div>
@@ -191,15 +232,6 @@ const TYPE_COLORS = {
   Evidence:    '#96ceb4', // 鼠尾草
 };
 
-// 每层显式 ring 半径（不是 depth * spacing）：避免 Product (depth 0) 全部
-// 落到 r=0 挤成一个球；外层节点多时给足间距避免重叠。
-const LAYER_RADII = {
-  0: 6,    // Product (~100)     小环顶
-  1: 16,   // Ingredient (~406)  仅次于 Evidence 的密集层
-  2: 26,   // Evidence (~435)    最密集, 居中便于和左右两环都连线
-  3: 36,   // HealthTopic (~94)  最外环, 节点最少
-};
-
 // 每层球体大小：节点多 → 球小一点，避免同环上互相盖住
 const LAYER_SIZES = {
   0: 1.0,   // Product
@@ -218,10 +250,20 @@ scene.background = new THREE.Color(0x0a0f1e);
 scene.fog = new THREE.Fog(0x0a0f1e, 80, 170);
 
 const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 500);
-// 拉到能看到最外环 r=38 + 4 层环全貌。target 略偏中下，让上 2 层占视觉中心
-const INIT_POS = new THREE.Vector3(34, 16, 50);
+// 视角由「方向 + 距离」决定:方向沿用原俯仰角,距离由 INIT_CAMERA_RADIUS(视野距离)控制。
+// 这样「视野距离」滑块和「重置视角」共享同一基准,改距离不破坏视角朝向。
 const INIT_TARGET = new THREE.Vector3(0, -12, 0);
+const INIT_CAMERA_RADIUS = 80;                         // 视野距离默认值(=滑块默认)
+const INIT_DIR = new THREE.Vector3(34, 28, 50).normalize(); // 原 (34,16,50)-(0,-12,0) 方向,单位化
+const INIT_POS = INIT_TARGET.clone().add(INIT_DIR.clone().multiplyScalar(INIT_CAMERA_RADIUS));
 camera.position.copy(INIT_POS);
+// 调试用辅助:把整个图(节点/连线/标签/环)整体沿 Y 平移
+function applyGraphOffsetY(v) {
+  nodeGroup.position.y = v;
+  linkGroup.position.y = v;
+  ringGroup.position.y = v;
+  labelGroup.position.y = v;
+}
 
 
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -232,6 +274,17 @@ controls.autoRotate = true;
 controls.autoRotateSpeed = 1.1;
 controls.minDistance = 8;
 controls.maxDistance = 180;
+// 视野距离滑块与 OrbitControls 双向同步:滚轮缩放会触发 change,
+// 把当前「相机到 target 的距离」写回滑块(取整 + 限位,旋转时距离不变故不刷屏)。
+controls.addEventListener('change', () => {
+  const dist = camera.position.distanceTo(controls.target);
+  const clamped = Math.round(Math.max(controls.minDistance, Math.min(controls.maxDistance, dist)));
+  const slider = document.getElementById('cameraRadius');
+  if (slider && +slider.value !== clamped) {
+    slider.value = clamped;
+    document.getElementById('cameraRadiusVal').textContent = clamped;
+  }
+});
 
 const viewParam = new URLSearchParams(location.search).get('view');
 if (viewParam === 'close') { camera.position.set(0, 13, 30); controls.autoRotate = false; }
@@ -246,11 +299,23 @@ const pointLight = new THREE.PointLight(0x4ecdc4, 0.8, 130);
 pointLight.position.set(-22, 14, -22);
 scene.add(pointLight);
 
+// 布局默认值(用户 2026-08-06 调试确定);重置视角时也回到这一组
+const GRAPH_OFFSET_Y_DEFAULT = 12;
+const LAYER_RING_RADII_DEFAULT = { 0: 10, 1: 20, 2: 30, 3: 40 };
+const cfg = {
+  layerSpacing: 10,
+  ringRadii: { ...LAYER_RING_RADII_DEFAULT },  // 每层环半径,4 个 dev 滑块独立控制
+  graphOffsetY: GRAPH_OFFSET_Y_DEFAULT,         // 整图初始 Y 偏移
+  showLabels: true,
+};
+
 const nodeGroup = new THREE.Group();
 const linkGroup = new THREE.Group();
 const labelGroup = new THREE.Group();
 const ringGroup = new THREE.Group();
 scene.add(nodeGroup, linkGroup, ringGroup, labelGroup);
+// 初始加载即把整图按默认 graphOffsetY 平移(配合新的层间距/环半径/视野距离)
+applyGraphOffsetY(cfg.graphOffsetY);
 
 let currentData = null;
 let nodeMap = new Map();
@@ -260,7 +325,15 @@ let selectedId = null;       // 节点 id，仅用于 info card
 let pinnedId = null;         // 点击锁住的高亮（持续显示，相机不动）
 let focusMode = null;        // null | 'lineage'
 let fly = null;
-const cfg = { layerSpacing: 6, ringSpacing: 8, showLabels: true };
+// 初始默认配置日志(页面加载即可见当前 bake 进去的默认值)——必须在 cfg 定义之后
+console.log('[kg-viewer] initial config:',
+  'layerSpacing=' + cfg.layerSpacing,
+  'ringRadii=' + cfg.ringRadii[0] + '/' + cfg.ringRadii[1] + '/' + cfg.ringRadii[2] + '/' + cfg.ringRadii[3],
+  'graphOffsetY=' + cfg.graphOffsetY,
+  'cameraRadius=' + INIT_CAMERA_RADIUS,
+  'INIT_POS=' + INIT_POS.toArray().map(n => +n.toFixed(2)).join(','),
+  'INIT_TARGET=' + INIT_TARGET.toArray().map(n => +n.toFixed(2)).join(',')
+);
 const hiddenTypes = new Set();
 const searchState = { query: '', matches: [], typeFilter: 'Product' };
 
@@ -398,14 +471,14 @@ function buildGraph(data) {
   }
 
   // 3) 把同深度的所有节点拉到同一条环上；每层 y 用 -depth * spacing
-  //    天然得到"自顶向下"的层叠。每层 ring 半径用 LAYER_RADII 显式
-  //    表，避免 depth=0 全部钉到原点。
+  //    天然得到"自顶向下"的层叠。每层 ring 半径由 cfg.ringRadii[depth]
+  //    独立控制(4 个滑块),便于调试成圆台 / frustum 形状。
   const maxDepth = Math.max(0, ...byDepth.keys());
   const ringRadii = new Map();
   for (const n of nodeMap.values()) {
-    n.r = (LAYER_RADII[n.depth] != null)
-      ? LAYER_RADII[n.depth] * (cfg.ringSpacing / 8)  // 滑块缩放
-      : (n.depth + 0.7) * cfg.ringSpacing;
+    n.r = (cfg.ringRadii[n.depth] != null)
+      ? cfg.ringRadii[n.depth]                        // 4 个滑块独立控制,无缩放系数
+      : (n.depth + 0.7) * 8;                          // fallback:未知 depth 按 ~8/step 推算
     n.x = n.r * Math.cos(n.angle);
     n.z = n.r * Math.sin(n.angle);
     n.y = -n.depth * cfg.layerSpacing;
@@ -416,7 +489,7 @@ function buildGraph(data) {
   }
 
   for (let d = 0; d <= maxDepth; d++) {
-    const R = ringRadii.get(d) || (d + 0.7) * cfg.ringSpacing;
+    const R = ringRadii.get(d) || (d + 0.7) * 8;
     if (R < 0.5) continue;
     const pts = [];
     for (let i = 0; i <= 128; i++) {
@@ -871,18 +944,81 @@ function loadJSON(text) {
 
 $('#toggleRotate').addEventListener('change', e => { controls.autoRotate = e.target.checked; });
 $('#toggleLabels').addEventListener('change', e => { cfg.showLabels = e.target.checked; labelGroup.visible = cfg.showLabels; });
-$('#spacing').addEventListener('input', e => {
-  const v = +e.target.value;
-  cfg.layerSpacing = 3 + v / 100 * 6;
-  cfg.ringSpacing = 4 + v / 100 * 8;
+// 调试滑块:每次改动都在控制台打印当前值,方便用户复制新默认值
+function logConfigChange(key, value, extra) {
+  const tail = extra ? ' ' + extra : '';
+  console.log('[kg-viewer] ' + key + ' =', value, tail);
+}
+
+$('#layerSpacing').addEventListener('input', e => {
+  cfg.layerSpacing = +e.target.value;
+  $('#layerSpacingVal').textContent = cfg.layerSpacing.toFixed(1);
+  logConfigChange('layerSpacing', cfg.layerSpacing);
   if (currentData) buildGraph(currentData);
+});
+
+// 4 层环半径独立滑块 — 调试圆台 / frustum 形状
+const RING_RADIUS_LABELS = ['Product 配方', 'Ingredient 成分', 'Evidence 循证', 'HealthTopic 结局'];
+function bindRingRadiusSlider(depth) {
+  $('#ringRadius' + depth).addEventListener('input', e => {
+    cfg.ringRadii[depth] = +e.target.value;
+    $('#ringRadius' + depth + 'Val').textContent = cfg.ringRadii[depth].toFixed(1);
+    logConfigChange('ringRadius' + depth + ' (' + RING_RADIUS_LABELS[depth] + ')', cfg.ringRadii[depth]);
+    if (currentData) buildGraph(currentData);
+  });
+}
+bindRingRadiusSlider(0);
+bindRingRadiusSlider(1);
+bindRingRadiusSlider(2);
+bindRingRadiusSlider(3);
+
+$('#graphOffsetY').addEventListener('input', e => {
+  cfg.graphOffsetY = +e.target.value;
+  $('#graphOffsetYVal').textContent = cfg.graphOffsetY.toFixed(1);
+  applyGraphOffsetY(cfg.graphOffsetY);
+  logConfigChange('graphOffsetY', cfg.graphOffsetY);
+});
+
+$('#cameraRadius').addEventListener('input', e => {
+  const r = +e.target.value;
+  $('#cameraRadiusVal').textContent = r;
+  // 保持当前视角方向不变,只改相机到 target 的距离
+  const dir = camera.position.clone().sub(controls.target);
+  if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
+  dir.normalize();
+  // 限制在 OrbitControls 的 minDistance / maxDistance 之内
+  const clamped = Math.max(controls.minDistance, Math.min(controls.maxDistance, r));
+  camera.position.copy(controls.target).add(dir.multiplyScalar(clamped));
+  if (clamped !== r) {
+    e.target.value = clamped;
+    $('#cameraRadiusVal').textContent = clamped;
+  }
+  logConfigChange('cameraRadius', clamped, '(pos=' + camera.position.toArray().map(n => +n.toFixed(2)).join(',') + ')');
 });
 $('#resetView').addEventListener('click', () => {
   fly = { t: 0, from: camera.position.clone(), to: INIT_POS.clone(), cFrom: controls.target.clone(), cTo: INIT_TARGET.clone() };
+  // 回到默认布局:整图 Y 偏移 + 视野距离
+  cfg.graphOffsetY = GRAPH_OFFSET_Y_DEFAULT;
+  $('#graphOffsetY').value = GRAPH_OFFSET_Y_DEFAULT;
+  $('#graphOffsetYVal').textContent = GRAPH_OFFSET_Y_DEFAULT.toFixed(1);
+  applyGraphOffsetY(GRAPH_OFFSET_Y_DEFAULT);
+  $('#cameraRadius').value = INIT_CAMERA_RADIUS;
+  $('#cameraRadiusVal').textContent = String(INIT_CAMERA_RADIUS);
 });
 $('#resetScene').addEventListener('click', () => {
   // 接管原"点击空白处"的复位逻辑：清 pin/focus/hover + 关闭 info card
   selectNode(null);
+});
+
+// dev 开关:?dev=1 显示布局调试滑块,或运行中按 D 键切换(在输入框内不响应)
+const devControls = document.getElementById('devControls');
+function setDevVisible(visible) { devControls.classList.toggle('visible', visible); }
+setDevVisible(new URLSearchParams(location.search).get('dev') === '1');
+window.addEventListener('keydown', e => {
+  if (e.key !== 'd' && e.key !== 'D') return;
+  const tag = (e.target && e.target.tagName) || '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  setDevVisible(!devControls.classList.contains('visible'));
 });
 $('#searchInput').addEventListener('input', e => { performSearch(e.target.value); updateClearButton(); });
 $('#searchTypeFilter').addEventListener('change', e => { searchState.typeFilter = e.target.value; performSearch($('#searchInput').value); });
