@@ -176,7 +176,7 @@ func TestResolveLabel_NoFFFDAtByteCutBoundary(t *testing.T) {
 // bytes.
 func TestResolveLabel_KeyPriority(t *testing.T) {
 	m := map[string]any{
-		"name":  "短名", // 2 runes
+		"name":  "短名",                       // 2 runes
 		"title": strings.Repeat("超长标题", 20), // over 40 runes
 	}
 	got := resolveLabel(m, []string{"name", "title", "label"})

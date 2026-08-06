@@ -31,5 +31,6 @@ func getEnv(key, fallback string) string {
 	}
 	return fallback
 }
+
 // IsChinese returns true when DB_LANG=zh (M3 Chinese-labeled KG).
 func (c *Config) IsChinese() bool { return os.Getenv("DB_LANG") == "zh" }

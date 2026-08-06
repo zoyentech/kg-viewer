@@ -28,7 +28,7 @@ func TestHandler_ServesEmbeddedHTML(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
-		`<title>营养健康循证知识图谱`,
+		`<title>营养健康循证分层知识图谱`,
 		`/v1/graph/kg`,               // live API URL
 		"three@0.160.0",              // three.js CDN version pin
 		"focus && n.id === focus.id", // animation loop must not deref null focus
@@ -39,8 +39,8 @@ func TestHandler_ServesEmbeddedHTML(t *testing.T) {
 		//   Three.js Raycaster.intersectObjects() 不检查 object.visible，
 		//   focus 模式下隐藏的节点 / hitbox 若不过滤，点击会"穿透"到 lineage 外的暗区。
 		"o.visible && o.userData.nodeId && !o.userData.isHitbox", // pickNodeId() 网格过滤
-		"o.visible && o.userData.isHitbox",                      // pickNodeId() hitbox 过滤
-		"o.visible), false",                                     // 动画循环 hover 过滤
+		"o.visible && o.userData.isHitbox",                       // pickNodeId() hitbox 过滤
+		"o.visible), false",                                      // 动画循环 hover 过滤
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("viewer page missing %q", want)

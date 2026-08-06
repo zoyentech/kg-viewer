@@ -56,11 +56,15 @@ type GraphNode struct {
 	Properties  map[string]any `json:"properties,omitempty"`
 }
 
-// GraphLink is a directed relationship between two node IDs.
+// GraphLink is a directed relationship between two node IDs. Properties
+// carries relationship-level attributes (e.g. the 声明成分 edge's amount /
+// 含量 and role) so the viewer can render per-edge detail such as a
+// 配方's ingredient dosage.
 type GraphLink struct {
-	Source string `json:"source"`
-	Target string `json:"target"`
-	Type   string `json:"type,omitempty"`
+	Source     string         `json:"source"`
+	Target     string         `json:"target"`
+	Type       string         `json:"type,omitempty"`
+	Properties map[string]any `json:"properties,omitempty"`
 }
 
 // KnowledgeGraph is the snapshot payload rendered by the 3D viewer.
@@ -234,21 +238,21 @@ func (c *Client) Fetch(ctx context.Context, opts Options) (*KnowledgeGraph, erro
 MATCH (a)-[r]->(b)
 WHERE NOT '%[1]s' IN labels(a) AND NOT '%[1]s' IN labels(b)
   AND ($label = '' OR $label IN labels(a) OR $label IN labels(b))
-RETURN %[2]s AS anode, %[3]s AS bnode, type(r) AS rt%[4]s
+RETURN %[2]s AS anode, %[3]s AS bnode, type(r) AS rt, properties(r) AS rprops%[4]s
 UNION ALL
 // 分支 2:Ingredient -(EC)- Evidence  (EVIDENCE_FOR)
 MATCH (ing)-[]-(ec1)-[]-(ev)
 WHERE '%[1]s' IN labels(ec1) AND '%[5]s' IN labels(ev)
   AND ing <> ev AND NOT '%[1]s' IN labels(ing)
   AND ($label = '' OR $label IN labels(ing) OR $label IN labels(ev))
-RETURN %[6]s AS anode, %[7]s AS bnode, 'EVIDENCE_FOR' AS rt%[4]s
+RETURN %[6]s AS anode, %[7]s AS bnode, 'EVIDENCE_FOR' AS rt, null AS rprops%[4]s
 UNION ALL
 // 分支 3:Evidence -(EC)- HealthTopic  (SUPPORTS_TOPIC)
 MATCH (ev2)-[]-(ec2)-[]-(ht)
 WHERE '%[5]s' IN labels(ev2) AND '%[1]s' IN labels(ec2) AND '%[8]s' IN labels(ht)
   AND ev2 <> ht
   AND ($label = '' OR $label IN labels(ev2) OR $label IN labels(ht))
-RETURN %[9]s AS anode, %[10]s AS bnode, 'SUPPORTS_TOPIC' AS rt%[4]s
+RETURN %[9]s AS anode, %[10]s AS bnode, 'SUPPORTS_TOPIC' AS rt, null AS rprops%[4]s
 `,
 		L.EvidenceContext,                         // %[1]s
 		nodeProj("a"), nodeProj("b"), limitClause, // %[2]s %[3]s %[4]s
@@ -273,7 +277,7 @@ RETURN %[9]s AS anode, %[10]s AS bnode, 'SUPPORTS_TOPIC' AS rt%[4]s
 	nodes := make([]GraphNode, 0, 2048)
 	seenNode := make(map[string]bool, 2048)
 	links := make([]GraphLink, 0, 4096)
-	seenLink := make(map[string]bool, 4096)
+	seenLink := make(map[string]int, 4096)
 
 	addNode := func(m map[string]any) {
 		id := str(m["id"])
@@ -304,6 +308,7 @@ RETURN %[9]s AS anode, %[10]s AS bnode, 'SUPPORTS_TOPIC' AS rt%[4]s
 		aMap, _ := rec.Values[0].(map[string]any)
 		bMap, _ := rec.Values[1].(map[string]any)
 		rt := str(rec.Values[2])
+		rProps, _ := rec.Values[3].(map[string]any)
 		if aMap != nil {
 			addNode(aMap)
 		}
@@ -315,11 +320,16 @@ RETURN %[9]s AS anode, %[10]s AS bnode, 'SUPPORTS_TOPIC' AS rt%[4]s
 			continue
 		}
 		key := src + "\x00" + dst + "\x00" + rt
-		if seenLink[key] {
+		// 同一 (src,dst,type) 可能存在多条 声明成分 关系：优先保留带
+		// "amount"(含量)的那条，这样配方信息卡能展示剂量信息。
+		if idx, ok := seenLink[key]; ok {
+			if hasAmount(rProps) && !hasAmount(links[idx].Properties) {
+				links[idx].Properties = toPropsMap(rProps)
+			}
 			continue
 		}
-		seenLink[key] = true
-		links = append(links, GraphLink{Source: src, Target: dst, Type: rt})
+		seenLink[key] = len(links)
+		links = append(links, GraphLink{Source: src, Target: dst, Type: rt, Properties: toPropsMap(rProps)})
 	}
 	if err := res.Err(); err != nil {
 		return nil, fmt.Errorf("neo4j read: %w", err)
@@ -366,7 +376,7 @@ func str(v any) string {
 		return strconv.FormatInt(t, 10)
 	case float64:
 		return strconv.FormatFloat(t, 'f', -1, 64)
-default:
+	default:
 		return fmt.Sprintf("%v", t)
 	}
 }
@@ -379,6 +389,14 @@ func toPropsMap(v any) map[string]any {
 	}
 	return nil
 }
+
+// hasAmount reports whether a relationship's properties carry a non-empty
+// "amount" (含量) value. Used to prefer amount-bearing declarations when
+// deduplicating Product→Ingredient edges.
+func hasAmount(props map[string]any) bool {
+	return props != nil && str(props["amount"]) != ""
+}
+
 // dirtyLabelPatterns lists substrings that mark a node as a sentinel /
 // placeholder produced when a source query returned no real results
 // (e.g. an empty PubMed search). Such nodes carry no useful information

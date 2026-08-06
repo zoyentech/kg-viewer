@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>营养健康循证知识图谱</title>
+<title>营养健康循证分层知识图谱</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; overflow: hidden; background: #0a0f1e; color: #e6ecff;
@@ -12,8 +12,10 @@
   #viewport canvas { display: block; }
   .panel { position: fixed; background: rgba(13, 20, 40, 0.74); border: 1px solid rgba(120, 160, 255, 0.2);
     border-radius: 12px; backdrop-filter: blur(10px); padding: 12px 14px; z-index: 10; }
-  #title { left: 50%; top: 14px; transform: translateX(-50%); font-size: 14px; letter-spacing: 1px;
-    color: rgba(230, 236, 255, 0.92); padding: 8px 16px; white-space: nowrap; }
+  #title { left: 50%; top: 16px; transform: translateX(-50%); font-size: 26px; font-weight: 700;
+    letter-spacing: 2px; color: rgba(240, 246, 255, 0.98); padding: 0; white-space: nowrap;
+    border: none; background: none; border-radius: 0; backdrop-filter: none;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.55); }
   #legend { right: 16px; top: 16px; min-width: 158px; }
   #legend h3 { font-size: 12px; font-weight: 600; color: rgba(230,236,255,.75); margin-bottom: 6px; letter-spacing: 1px; }
   .legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; }
@@ -46,10 +48,40 @@
   #infoId { font-size: 11px; opacity: .45; margin-top: 2px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   #infoStat { font-size: 12px; opacity: .78; margin-top: 8px; }
   #infoDesc { font-size: 13px; line-height: 1.65; margin-top: 9px; padding-top: 9px; border-top: 1px solid rgba(120,160,255,.18); display: none; }
-  #infoDesc .desc-loading { opacity: .5; }
-  #infoDesc .desc-error { opacity: .55; font-size: 12px; }
- .help { position: fixed; bottom: 16px; right: 16px; font-size: 11px; opacity: .5; text-align: right; z-index: 10; line-height: 1.7; }
-  #searchPanel { left: 50%; top: 48px; transform: translateX(-50%); width: 360px; padding: 8px 10px; }
+ #infoDesc .desc-loading { opacity: .5; }
+ #infoDesc .desc-error { opacity: .55; font-size: 12px; }
+ #infoProductType { font-size: 12px; opacity: .82; margin-top: 4px; display: none; }
+ #infoProductType .pt-key { opacity: .6; }
+ #infoIngredients { display: none; margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(120,160,255,.18); }
+ #infoIngredients .ing-title { font-size: 12px; opacity: .72; margin-bottom: 6px; letter-spacing: .5px; }
+ #infoIngredients .ing-list { max-height: 220px; overflow-y: auto; }
+ #infoIngredients .ing-list::-webkit-scrollbar { width: 4px; }
+ #infoIngredients .ing-list::-webkit-scrollbar-thumb { background: rgba(120,160,255,.25); border-radius: 2px; }
+ #infoIngredients .ing-row { display: flex; align-items: baseline; gap: 6px; padding: 3px 0; font-size: 12px; line-height: 1.4; }
+ #infoIngredients .ing-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+ #infoIngredients .ing-amt { flex: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; opacity: .82; font-variant-numeric: tabular-nums; white-space: nowrap; }
+ #infoIngredients .ing-amt.none { opacity: .35; }
+  #infoAbstract { display: none; margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(120,160,255,.18); }
+  #infoAbstract .abs-title { font-size: 12px; opacity: .72; margin-bottom: 6px; letter-spacing: .5px; }
+  #infoAbstract .abs-body { max-height: 168px; overflow-y: auto; font-size: 12px; line-height: 1.6; padding-right: 6px;
+    white-space: pre-wrap; word-break: break-word; }
+  #infoAbstract .abs-body::-webkit-scrollbar { width: 5px; }
+  #infoAbstract .abs-body::-webkit-scrollbar-thumb { background: rgba(120,160,255,.28); border-radius: 3px; }
+  #infoAbstract .abs-empty { opacity: .4; font-size: 12px; }
+  #infoEvidence { display: none; margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(120,160,255,.18); }
+  #infoEvidence .ev-title { font-size: 12px; opacity: .72; margin-bottom: 6px; letter-spacing: .5px; }
+  #infoEvidence .ev-row { font-size: 12px; line-height: 1.5; margin: 5px 0; display: flex; align-items: baseline; gap: 6px; }
+  #infoEvidence .ev-key { flex: none; opacity: .6; }
+  #infoEvidence .ev-value { flex: 1; min-width: 0; word-break: break-word; }
+  #infoEvidence .ev-badge { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 11px; font-weight: 600; }
+  #infoEvidence .ev-badge.benefit { color: #7ae0c3; background: rgba(122,224,195,.14); border: 1px solid rgba(122,224,195,.4); }
+  #infoEvidence .ev-badge.harm { color: #ff9f6b; background: rgba(255,159,107,.14); border: 1px solid rgba(255,159,107,.4); }
+  #infoEvidence .ev-badge.neutral { color: rgba(230,236,255,.7); background: rgba(120,160,255,.1); border: 1px solid rgba(120,160,255,.25); }
+  #infoEvidence .ev-source { color: #8fd6ff; text-decoration: none; overflow-wrap: anywhere; }
+  #infoEvidence .ev-source:hover { text-decoration: underline; }
+  #infoEvidence .ev-empty { opacity: .4; }
+.help { position: fixed; bottom: 16px; right: 16px; font-size: 11px; opacity: .5; text-align: right; z-index: 10; line-height: 1.7; }
+  #searchPanel { left: 50%; top: 58px; transform: translateX(-50%); width: 360px; padding: 8px 10px; }
   .search-row { display: flex; gap: 6px; }
   #searchTypeFilter { flex: none; background: rgba(13,20,40,.6); border: 1px solid rgba(120,160,255,.25);
     border-radius: 8px; padding: 7px 6px; color: #e6ecff; font-size: 12px; outline: none;
@@ -84,7 +116,7 @@
 <body>
 <div id="viewport"></div>
 
-<div id="title" class="panel">营养健康循证知识图谱</div>
+<div id="title" class="panel">营养健康循证分层知识图谱</div>
 
 <div id="searchPanel" class="panel">
   <div class="search-row">
@@ -157,9 +189,13 @@
 <div id="infoCard" class="panel hidden">
   <div id="infoName"></div>
   <div id="infoType"></div>
+  <div id="infoProductType"></div>
   <div id="infoId"></div>
   <div id="infoStat"></div>
-  <div id="infoDesc"></div>
+  <div id="infoIngredients"></div>
+  <div id="infoAbstract"></div>
+  <div id="infoEvidence"></div>
+<div id="infoDesc"></div>
 </div>
 <div id="tooltip"></div>
 <div class="help">拖拽 JSON 文件到窗口可加载自定义图谱<br>滚轮缩放 · 拖拽旋转 · 点击节点聚焦 · Esc 取消</div>
@@ -185,11 +221,11 @@ const SAMPLE = {
     healthtopic: { label: '健康结局', color: '#a78bfa' },
     evidence:    { label: '循证证据', color: '#96ceb4' }
   },
-  nodes: [
-    { id: 'p1', label: '复合维生素 B 群', type: 'product' },
-    { id: 'p2', label: 'Omega-3 鱼油',    type: 'product' },
-    { id: 'p3', label: '钙镁锌片',        type: 'product' },
-    { id: 'i1', label: '维生素 B6',  type: 'ingredient' },
+ nodes: [
+    { id: 'p1', label: '复合维生素 B 群', type: 'product', properties: { product_type: '复合维生素（B 族）' } },
+    { id: 'p2', label: 'Omega-3 鱼油',    type: 'product', properties: { product_type: '鱼油（Omega-3）' } },
+    { id: 'p3', label: '钙镁锌片',        type: 'product', properties: { product_type: '矿物质（钙镁锌）' } },
+   { id: 'i1', label: '维生素 B6',  type: 'ingredient' },
     { id: 'i2', label: '维生素 B12', type: 'ingredient' },
     { id: 'i3', label: 'EPA',        type: 'ingredient' },
     { id: 'i4', label: 'DHA',        type: 'ingredient' },
@@ -202,14 +238,15 @@ const SAMPLE = {
     { id: 'e2', label: 'Omega-3 对血脂的 Meta 分析', type: 'evidence' },
     { id: 'e3', label: '钙镁协同的骨密度队列',     type: 'evidence' }
   ],
-  links: [
-    // Product - Ingredient (产品含成分)
-    ['p1','i1'], ['p1','i2'], ['p2','i3'], ['p2','i4'], ['p3','i5'], ['p3','i6'],
-    // Ingredient - Evidence (成分→论文, EVIDENCE_FOR)
-    ['i1','e1'], ['i2','e1'], ['i3','e2'], ['i4','e2'], ['i5','e3'], ['i6','e3'],
-    // Evidence - HealthTopic (论文→健康结局, SUPPORTS_TOPIC)
-    ['e1','t1'], ['e1','t3'], ['e2','t1'], ['e3','t2']
-  ].map(([source, target]) => ({ source, target }))
+ links: [
+   // Product - Ingredient (产品含成分)
+    // 第三个元素为「声明成分」关系的 amount(含量)，演示剂量信息
+    ['p1','i1','1.7 mg'], ['p1','i2','2.4 mcg'], ['p2','i3','180 mg'], ['p2','i4','120 mg'], ['p3','i5','200 mg'], ['p3','i6','50 mg'],
+   // Ingredient - Evidence (成分→论文, EVIDENCE_FOR)
+   ['i1','e1'], ['i2','e1'], ['i3','e2'], ['i4','e2'], ['i5','e3'], ['i6','e3'],
+   // Evidence - HealthTopic (论文→健康结局, SUPPORTS_TOPIC)
+   ['e1','t1'], ['e1','t3'], ['e2','t1'], ['e3','t2']
+  ].map(([source, target, amount]) => ({ source, target, ...(amount ? { properties: { amount } } : {}) }))
 };
 
 // 顶到底层级顺序（用户指定，2026-08-05）。
@@ -320,6 +357,9 @@ applyGraphOffsetY(cfg.graphOffsetY);
 let currentData = null;
 let nodeMap = new Map();
 let linkObjs = [];
+// linkProps: 按边索引(sourceId\x00targetId)缓存关系属性,用于在 info card
+// 中展示 配方→成分 的"含量"(amount)。每次 buildGraph 重建。
+let linkProps = new Map();
 let hoveredId = null;        // 鼠标悬停（临时高亮预览）
 let selectedId = null;       // 节点 id，仅用于 info card
 let pinnedId = null;         // 点击锁住的高亮（持续显示，相机不动）
@@ -415,7 +455,7 @@ function buildGraph(data) {
   pinnedId = null; hoveredId = null; selectedId = null; focusMode = null;
   $('#infoCard').classList.add('hidden');
   tooltip.style.display = 'none';
-  nodeMap = new Map(); linkObjs = [];
+  nodeMap = new Map(); linkObjs = []; linkProps = new Map();
 
   const types = Object.assign({}, SAMPLE.types, data.types || {});
   const nodes = (data.nodes || []).map(n => ({
@@ -427,7 +467,8 @@ function buildGraph(data) {
   })).filter(n => n.id);
   const links = (data.links || []).map(l => ({
     a: typeof l.source === 'object' ? String(l.source.id ?? l.source.name) : String(l.source),
-    b: typeof l.target === 'object' ? String(l.target.id ?? l.target.name) : String(l.target)
+    b: typeof l.target === 'object' ? String(l.target.id ?? l.target.name) : String(l.target),
+    props: l.properties || null,
   }));
 
   for (const n of nodes) {
@@ -438,6 +479,7 @@ function buildGraph(data) {
     if (!a || !b || a === b) continue;
     a.children.push(l.b);
     b.parents.push(l.a);
+    if (l.props) linkProps.set(l.a + '\x00' + l.b, l.props);
   }
 
   // 1) depth 直接按 TYPE_DEPTHS 排，未知 type 放最后（fallback 槽位递增）
@@ -748,6 +790,8 @@ function selectNode(id) {
   // 相机距离 / 位置完全由用户拖拽 / 滚轮控制。
   // id=null 时也清掉 hover（Esc / 点空白 = 完整复位）
   selectedId = id;
+  // 选中节点时先恢复相机缩放；hover 证据摘要区会临时关闭（见 renderEvidenceExtras）
+  controls.enableZoom = true;
   updateClearButton();
   if (id && nodeMap.has(id)) {
     pinnedId = id;
@@ -769,11 +813,16 @@ function selectNode(id) {
   $('#infoName').style.color = '#' + n.color.getHexString();
   $('#infoType').textContent = `类型：${typeLabel(n.type, types)}`;
   $('#infoId').textContent = `id: ${n.id}`;
-  $('#infoStat').textContent = `${n.children.length} 个子节点 · ${n.parents.length} 个父节点 · 深度 ${n.depth}`;
-  card.classList.remove('hidden');
+ $('#infoStat').textContent = `${n.children.length} 个子节点 · ${n.parents.length} 个父节点 · 深度 ${n.depth}`;
+ card.classList.remove('hidden');
 
-  // Fetch node detail (description) when clicking an Ingredient node.
-  const descEl = $('#infoDesc');
+// 配方专属：展示 product_type + 成分名称/含量（其它类型自动隐藏）
+renderProductExtras(n);
+ // 证据专属：展示 摘要 / 结论 / 证据等级 / 证据来源（摘要 hover 时接管滚轮、暂停相机缩放）
+ renderEvidenceExtras(n);
+
+// Fetch node detail (description) when clicking an Ingredient node.
+ const descEl = $('#infoDesc');
   if (n.description) {
     // Description already embedded in the loaded data (snapshot/API).
     descEl.textContent = n.description;
@@ -788,9 +837,183 @@ function selectNode(id) {
   }
 }
 
+// 配方（Product）信息卡专属区块：展示 product_type + 所有成分节点名称与含量。
+// 含量(amount)取自 Product→Ingredient 的「声明成分」关系属性；无含量则显示「—」。
+// 有含量的成分排在前面，再按名称排序，方便快速阅读剂量信息。
+function renderProductExtras(n) {
+  const ptEl = $('#infoProductType');
+  const ingEl = $('#infoIngredients');
+  const t = String(n.type).toLowerCase();
+  if (t !== 'product') {
+    ptEl.style.display = 'none';
+    ingEl.style.display = 'none';
+    return;
+  }
+  // 产品类型（product_type）
+  const ptype = n.properties && n.properties.product_type;
+  if (ptype) {
+    ptEl.innerHTML = '<span class="pt-key">产品类型：</span>' + escapeHtml(String(ptype));
+    ptEl.style.display = 'block';
+  } else {
+    ptEl.style.display = 'none';
+  }
+  // 成分子节点（去重）：名称 + 含量
+  const seen = new Set();
+  const ings = n.children
+    .map(id => nodeMap.get(id))
+    .filter(c => c && String(c.type).toLowerCase() === 'ingredient' && !seen.has(c.id) && seen.add(c.id));
+  ings.sort((a, b) => {
+    const aa = amountOf(n.id, a.id) ? 0 : 1;
+    const bb = amountOf(n.id, b.id) ? 0 : 1;
+    if (aa !== bb) return aa - bb;
+    return a.label.localeCompare(b.label, 'zh');
+  });
+  ingEl.innerHTML = '';
+  if (!ings.length) { ingEl.style.display = 'none'; return; }
+  const title = document.createElement('div');
+  title.className = 'ing-title';
+  title.textContent = `成分（${ings.length}）`;
+  ingEl.appendChild(title);
+  const list = document.createElement('div');
+  list.className = 'ing-list';
+  for (const c of ings) {
+    const row = document.createElement('div');
+    row.className = 'ing-row';
+    const name = document.createElement('span');
+    name.className = 'ing-name';
+    name.textContent = c.label;
+    name.style.color = '#' + c.color.getHexString();
+    const amt = amountOf(n.id, c.id);
+    const amtEl = document.createElement('span');
+    amtEl.className = 'ing-amt' + (amt ? '' : ' none');
+    amtEl.textContent = amt || '—';
+    row.appendChild(name);
+    row.appendChild(amtEl);
+    list.appendChild(row);
+  }
+  ingEl.appendChild(list);
+  ingEl.style.display = 'block';
+}
+
+// amountOf 返回 Product→Ingredient 边上的含量(amount)字符串（去除残留的前导
+// "=" 与空白），无含量时返回空串。源数据里部分 amount 形如 "=20毫克"，清洗后更整洁。
+function amountOf(productId, ingredientId) {
+  const p = linkProps.get(productId + '\x00' + ingredientId);
+  if (!p || p.amount == null) return '';
+  return String(p.amount).replace(/^[=\s]+/, '').trim();
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
 // fetchNodeDetail queries the backend for a single node's properties
 // (description etc.) by elementId. Only updates the DOM if the user is
 // still on the same node (selectedId guard against stale responses).
+// 证据（Evidence）信息卡专属区块：展示 摘要 / 结论 / 证据等级 / 证据来源。
+// 摘要可能上千字，用 max-height + 纵向滚动条；鼠标 hover 到摘要区时接管
+// 滚轮（暂停 OrbitControls 缩放），离开后恢复相机缩放。
+function renderEvidenceExtras(n) {
+  const absEl = $('#infoAbstract');
+  const evEl = $('#infoEvidence');
+  if (String(n.type).toLowerCase() !== 'evidence') {
+    absEl.style.display = 'none';
+    evEl.style.display = 'none';
+    return;
+  }
+  const props = n.properties || {};
+  // 摘要（summary，旧数据兜底 abstract_excerpt）：可滚动区块。
+  absEl.innerHTML = '';
+  const title = document.createElement('div');
+  title.className = 'abs-title';
+  title.textContent = '摘要';
+  absEl.appendChild(title);
+  const body = document.createElement('div');
+  body.className = 'abs-body';
+  const excerpt = props.summary || props.abstract_excerpt;
+  if (excerpt) {
+    body.textContent = String(excerpt);
+  } else {
+    const empty = document.createElement('span');
+    empty.className = 'abs-empty';
+    empty.textContent = '暂无摘要';
+    body.appendChild(empty);
+  }
+  absEl.appendChild(body);
+  absEl.style.display = 'block';
+  // hover 摘要区：暂停相机滚轮缩放，交由文本滚动；离开后恢复。
+  body.addEventListener('mouseenter', () => { controls.enableZoom = false; });
+  body.addEventListener('mouseleave', () => { controls.enableZoom = true; });
+  // 兜底：阻止滚轮事件冒泡到画布（不同 OrbitControls 版本监听位置不同）。
+  body.addEventListener('wheel', e => e.stopPropagation(), { passive: true });
+
+  // 结论（conclusion）+ 证据等级（evidence_level）+ 证据来源（source_url）。
+  evEl.innerHTML = '';
+  const evTitle = document.createElement('div');
+  evTitle.className = 'ev-title';
+  evTitle.textContent = '结论';
+  evEl.appendChild(evTitle);
+  const conclusion = props.conclusion || props.direction_hint;
+  const conclMeta = conclusionMeta(conclusion);
+  const conclRow = document.createElement('div');
+  conclRow.className = 'ev-row';
+  const conclBadge = document.createElement('span');
+  conclBadge.className = 'ev-badge ' + conclMeta.cls;
+  conclBadge.textContent = conclMeta.label;
+  conclRow.appendChild(conclBadge);
+  evEl.appendChild(conclRow);
+
+  const levelRow = document.createElement('div');
+  levelRow.className = 'ev-row';
+  const levelKey = document.createElement('span');
+  levelKey.className = 'ev-key';
+  levelKey.textContent = '证据等级';
+  const levelVal = document.createElement('span');
+  levelVal.className = 'ev-value';
+  levelVal.textContent = props.evidence_level || '暂无';
+  levelVal.classList.toggle('ev-empty', !props.evidence_level);
+  levelRow.appendChild(levelKey);
+  levelRow.appendChild(levelVal);
+  evEl.appendChild(levelRow);
+
+  const sourceRow = document.createElement('div');
+  sourceRow.className = 'ev-row';
+  const sourceKey = document.createElement('span');
+  sourceKey.className = 'ev-key';
+  sourceKey.textContent = '证据来源';
+  const sourceVal = document.createElement('span');
+  sourceVal.className = 'ev-value';
+  const source = props.source_url || props.source;
+  if (source) {
+    const link = document.createElement('a');
+    link.className = 'ev-source';
+    link.href = String(source);
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = String(source);
+    link.addEventListener('click', e => e.stopPropagation());
+    sourceVal.appendChild(link);
+  } else {
+    sourceVal.className += ' ev-empty';
+    sourceVal.textContent = '暂无';
+  }
+  sourceRow.appendChild(sourceKey);
+  sourceRow.appendChild(sourceVal);
+  evEl.appendChild(sourceRow);
+  evEl.style.display = 'block';
+}
+
+// conclusionMeta maps a conclusion / old direction_hint value to a display
+// label and color class for the badge in the Evidence info card.
+function conclusionMeta(v) {
+  const s = String(v || '');
+  if (s === '有益' || s === '轻微有益' || /有益|改善|(?<!无)有效|benefit/i.test(s)) return { label: s, cls: 'benefit' };
+  if (s === '有害' || /危害|有害|无益|风险|harm/i.test(s)) return { label: s, cls: 'harm' };
+  if (s === '无效' || /无明确|无明显|无效应|neutral/i.test(s)) return { label: s, cls: 'neutral' };
+  if (s === 'mixed_or_not_assessed') return { label: '混合 / 未评估', cls: 'neutral' };
+  return { label: s || '未标注', cls: 'neutral' };
+}
+
 async function fetchNodeDetail(id) {
   const descEl = $('#infoDesc');
   try {
