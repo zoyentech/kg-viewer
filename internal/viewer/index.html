@@ -517,10 +517,6 @@ function renderSearchTypeFilter(data) {
   const allOrdered = [...order, ...extra];
   const prev = sel.value;
   sel.innerHTML = '';
-  const allOpt = document.createElement('option');
-  allOpt.value = 'all';
-  allOpt.textContent = '全部';
-  sel.appendChild(allOpt);
   for (const t of allOrdered) {
     if (!counts[t]) continue;
     const info = types[t];
@@ -572,23 +568,25 @@ function toggleType(type) {
 // --- Search: live filter nodes by label + type ---
 function performSearch(query) {
   searchState.query = query.trim().toLowerCase();
-  const results = $('#searchResults');
-  if (!searchState.query && searchState.typeFilter === 'all') {
-    results.style.display = 'none';
-    results.innerHTML = '';
-    searchState.matches = [];
-    return;
-  }
   const types = Object.assign({}, SAMPLE.types, currentData?.types || {});
   searchState.matches = [...nodeMap.values()]
     .filter(n => {
       const matchesText = !searchState.query || n.label.toLowerCase().includes(searchState.query);
-      const matchesType = searchState.typeFilter === 'all' || n.type === searchState.typeFilter;
+      const matchesType = n.type === searchState.typeFilter;
       return matchesText && matchesType;
     })
     .sort((a, b) => a.label.localeCompare(b.label))
     .slice(0, 50);
   renderSearchResults(searchState.matches, types);
+}
+
+// 搜索结果下拉的显示/隐藏由聚焦/点击控制，与 query 是否为空解耦。
+function showSearchResults() {
+  // 重新按当前 query + typeFilter 渲染（query 为空时即"该 type 的全部节点"）
+  performSearch($('#searchInput').value);
+}
+function hideSearchResults() {
+  $('#searchResults').style.display = 'none';
 }
 
 function renderSearchResults(matches, types) {
@@ -752,9 +750,11 @@ function pickNodeId() {
 }
 
 renderer.domElement.addEventListener('click', () => {
-  // 点击节点才选中；点空白处不执行任何逻辑（复位改由「重置画面」按钮接管）
+  // 点击节点才选中；点空白处不执行任何逻辑（复位改由「重置画面」按钮接管），
+  // 同时关闭搜索结果下拉。
   const id = pickNodeId();
   if (id) selectNode(id);
+  else hideSearchResults();
 });
 window.addEventListener('keydown', e => { if (e.key === 'Escape') selectNode(null); });
 
@@ -886,6 +886,24 @@ $('#resetScene').addEventListener('click', () => {
 });
 $('#searchInput').addEventListener('input', e => { performSearch(e.target.value); updateClearButton(); });
 $('#searchTypeFilter').addEventListener('change', e => { searchState.typeFilter = e.target.value; performSearch($('#searchInput').value); });
+
+// 搜索结果下拉：仅在用户聚焦到 searchPanel 内时显示，移出（包括点 3D 画布空白处）即隐藏
+document.addEventListener('focusin', e => {
+  const t = e.target;
+  if (t && t.closest && t.closest('#searchPanel')) {
+    // 聚焦到 #searchInput / #searchTypeFilter / 清除按钮 / 搜索结果项：渲染并显示
+    showSearchResults();
+  } else if (t && t.matches && t.matches('input, select, textarea, button')) {
+    // 聚焦到搜索面板以外的输入控件：隐藏
+    hideSearchResults();
+  }
+});
+// 3D 画布 / 其它非 searchPanel 区域的点击：隐藏（canvas 不可 focus，需要靠 pointer 事件兜底）
+document.addEventListener('pointerdown', e => {
+  if (e.target && e.target.closest && e.target.closest('#searchPanel')) return;
+  // 点击 searchResult / searchClear 等子元素时其自身的 click 已处理；这里统一兜底隐藏
+  hideSearchResults();
+}, true);
 function updateClearButton() {
   $('#searchClear').style.display = ($('#searchInput').value || selectedId) ? 'flex' : 'none';
 }
@@ -893,6 +911,7 @@ $('#searchClear').addEventListener('click', () => {
   $('#searchInput').value = '';
   performSearch('');
   selectNode(null);
+  hideSearchResults();
   updateClearButton();
 });
 window.addEventListener('dragover', e => e.preventDefault());
