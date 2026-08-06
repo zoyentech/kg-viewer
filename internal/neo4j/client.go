@@ -329,13 +329,19 @@ RETURN %[9]s AS anode, %[10]s AS bnode, 'SUPPORTS_TOPIC' AS rt%[4]s
 }
 
 // resolveLabel picks the best human-readable string for a node, with
-// 40-char truncation so the 3D label sprites stay legible. Falls back
-// to the numeric internal id when nothing else is set.
+// 40-rune truncation so the 3D label sprites stay legible. Truncation
+// MUST be done by rune (Unicode code-point) rather than by byte — the
+// 3D viewer renders Chinese titles whose UTF-8 encoding is 3 bytes per
+// character, so a byte-based slice (v[:N]) would cut a multi-byte
+// sequence in half and produce U+FFFD "\ufffd" in the rendered label.
+// See TestResolveLabel_* for the regression cases.
 func resolveLabel(m map[string]any, keys []string) string {
+	const maxRunes = 40
 	for _, k := range keys {
 		if v, ok := m[k].(string); ok && v != "" {
-			if len(v) > 40 {
-				return v[:40]
+			runes := []rune(v)
+			if len(runes) > maxRunes {
+				return string(runes[:maxRunes])
 			}
 			return v
 		}
