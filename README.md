@@ -90,3 +90,46 @@ make test      # 单元测试
 ```
 
 详细文档见 [docs/kg-3d-viewer.md](docs/kg-3d-viewer.md)。
+
+## 生产部署（ssh prod，端口 8090）
+
+本地配置好 `ssh prod` 后，直接执行：
+
+```bash
+make deployprod
+```
+
+该命令会交叉编译 Linux/amd64 二进制，通过 `rsync` 上传到
+`/opt/kg-viewer`，安装并更新 `kg-viewer.service`（systemd，开机自启），
+以 `kgviewer` 用户运行在 `8090` 端口，不配置域名和 nginx，并在重启后
+自动健康检查 `http://127.0.0.1:8090/kg-viewer`。
+
+如需在生产接入 Neo4j，把生产环境变量放到仓库根目录 `.env.prod`
+（已加入 `.gitignore`），`make deployprod` 会自动上传为
+`/opt/kg-viewer/.env`；未提供时保留服务器已有配置，默认以内嵌快照运行。
+
+查看运行状态：
+
+```bash
+make deployprod-status
+```
+
+### 临时客户演示链接（防爬取）
+
+在 `.env.prod` 中配置一个随机密钥：
+
+```bash
+DEMO_SECRET=<openssl rand -hex 32 生成的值>
+```
+
+部署后生成限时演示链接：
+
+```bash
+make demo-url HOURS=72
+```
+
+生成的链接格式为
+`http://82.156.88.47:8090/kg-viewer?token=<过期时间>.<HMAC签名>`。
+配置了 `DEMO_SECRET` 后，页面、图谱 API 和 `snapshot.json` 都必须携带
+有效且未过期的令牌，否则统一返回 404。任何人拿到该链接都能在有效期内
+正常查看数据，这是防止无令牌爬虫抓取，不是防止拿到链接的人保存数据。

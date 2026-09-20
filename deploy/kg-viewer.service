@@ -1,0 +1,23 @@
+[Unit]
+Description=KG Viewer (3D knowledge graph)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kgviewer
+Group=kgviewer
+WorkingDirectory=/opt/kg-viewer
+Environment=KG_VIEWER_PORT=8090
+Environment=GIN_MODE=release
+EnvironmentFile=-/opt/kg-viewer/.env
+ExecStart=/opt/kg-viewer/kg-viewer
+Restart=always
+RestartSec=3
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=kg-viewer
+
+[Install]
+WantedBy=multi-user.target

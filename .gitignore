@@ -9,6 +9,7 @@ test-results/
 
 # Env
 .env
+.env.prod
 *.env.local
 
 # Go test / coverage
