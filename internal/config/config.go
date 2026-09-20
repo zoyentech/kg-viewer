@@ -10,6 +10,7 @@ type Config struct {
 	Neo4jUser     string
 	Neo4jPassword string
 	Neo4jDatabase string
+	DemoSecret    string
 }
 
 // Load reads configuration from the environment. NEO4J_URI empty
@@ -22,6 +23,7 @@ func Load() *Config {
 		Neo4jUser:     os.Getenv("NEO4J_USER"),
 		Neo4jPassword: os.Getenv("NEO4J_PASSWORD"),
 		Neo4jDatabase: getEnv("NEO4J_DATABASE", "neo4j"),
+		DemoSecret:    os.Getenv("DEMO_SECRET"),
 	}
 }
 

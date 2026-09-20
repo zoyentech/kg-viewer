@@ -1017,7 +1017,7 @@ function conclusionMeta(v) {
 async function fetchNodeDetail(id) {
   const descEl = $('#infoDesc');
   try {
-    const resp = await fetch(NODE_DETAIL_URL + '?id=' + encodeURIComponent(id));
+    const resp = await fetch(withToken(NODE_DETAIL_URL + '?id=' + encodeURIComponent(id)));
     const body = await resp.json();
     if (selectedId !== id) return;
     if (body.code === 0 && body.data && body.data.description) {
@@ -1295,6 +1295,12 @@ function showStatus(msg, color) {
   showStatus._t = setTimeout(() => { statusEl.style.display = 'none'; }, 9000);
 }
 
+const urlToken = qParams.get('token') || '';
+function withToken(url) {
+  if (!urlToken) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(urlToken);
+}
+
 const API_BASE = (qParams.get('api') || '').replace(/\/+$/, '');
 const API_URL = API_BASE + '/v1/graph/kg';
 const NODE_DETAIL_URL = API_BASE + '/v1/node/detail';
@@ -1302,7 +1308,7 @@ const NODE_DETAIL_URL = API_BASE + '/v1/node/detail';
 async function loadFromAPI() {
   showStatus('正在从后端加载图谱…', '#4ecdc4');
   try {
-    const resp = await fetch(API_URL, { headers: { Accept: 'application/json' } });
+    const resp = await fetch(withToken(API_URL), { headers: { Accept: 'application/json' } });
     let body = null;
     try { body = await resp.json(); } catch { /* keep null */ }
     const data = body && body.code === 0 ? body.data : null;
@@ -1324,7 +1330,7 @@ async function loadFromAPI() {
 }
 const dataParam = qParams.get('data');
 if (dataParam) {
-  fetch(dataParam).then(r => r.text()).then(loadJSON).catch(() => {});
+  fetch(withToken(dataParam)).then(r => r.text()).then(loadJSON).catch(() => {});
 } else {
   loadFromAPI();
 }

@@ -43,6 +43,7 @@ func main() {
 	}
 
 	r := gin.Default()
+	r.Use(demoAuthMiddleware(cfg.DemoSecret))
 
 	// 3D knowledge-graph viewer (embedded static page, same origin as API).
 	r.GET("/kg-viewer", viewer.Handler)
