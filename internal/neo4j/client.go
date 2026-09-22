@@ -19,6 +19,46 @@ type LabelSet struct {
 	EvidenceContext string // EN: "EvidenceContext"  ZH: "证据上下文"
 	Evidence        string // EN: "Evidence"          ZH: "循证证据"
 	HealthTopic     string // EN: "HealthTopic"       ZH: "健康结局"
+	DisplayKeys     []string
+}
+
+var legacyDisplayKeys = []string{
+	"canonical_name",
+	"name",
+	"title",
+	"label",
+	"topic_id",
+	"evidence_id",
+	"product_id",
+	"ingredient_id",
+}
+
+var v2EnglishDisplayKeys = []string{
+	"name_en",
+	"canonical_name",
+	"title_en",
+	"title",
+	"name",
+	"label",
+	"topic_id",
+	"evidence_id",
+	"product_id",
+	"ingredient_id",
+	"name_zh",
+}
+
+var v2ChineseDisplayKeys = []string{
+	"name_zh",
+	"title_zh",
+	"name_en",
+	"canonical_name",
+	"title",
+	"name",
+	"label",
+	"topic_id",
+	"evidence_id",
+	"product_id",
+	"ingredient_id",
 }
 
 // EnglishLabels targets the M3 :7687 database (nutrition-evidence-kg).
@@ -26,6 +66,7 @@ var EnglishLabels = LabelSet{
 	EvidenceContext: "EvidenceContext",
 	Evidence:        "Evidence",
 	HealthTopic:     "HealthTopic",
+	DisplayKeys:     legacyDisplayKeys,
 }
 
 // ChineseLabels targets the M3 :7688 database (nutrition-evidence-kg-zh).
@@ -33,6 +74,37 @@ var ChineseLabels = LabelSet{
 	EvidenceContext: "证据上下文",
 	Evidence:        "循证证据",
 	HealthTopic:     "健康结局",
+	DisplayKeys:     legacyDisplayKeys,
+}
+
+// V2EnglishLabels and V2ChineseLabels target the same bilingual v2 schema.
+// Only the display-property priority changes; the Neo4j labels stay English.
+var V2EnglishLabels = LabelSet{
+	EvidenceContext: "EvidenceContext",
+	Evidence:        "Evidence",
+	HealthTopic:     "HealthTopic",
+	DisplayKeys:     v2EnglishDisplayKeys,
+}
+
+var V2ChineseLabels = LabelSet{
+	EvidenceContext: "EvidenceContext",
+	Evidence:        "Evidence",
+	HealthTopic:     "HealthTopic",
+	DisplayKeys:     v2ChineseDisplayKeys,
+}
+
+// LabelsFor selects the label/property schema for a configured graph profile.
+func LabelsFor(bilingual, chinese bool) LabelSet {
+	if bilingual {
+		if chinese {
+			return V2ChineseLabels
+		}
+		return V2EnglishLabels
+	}
+	if chinese {
+		return ChineseLabels
+	}
+	return EnglishLabels
 }
 
 // chineseToEnglish normalises Chinese labels to the canonical English
@@ -205,15 +277,9 @@ func (c *Client) Fetch(ctx context.Context, opts Options) (*KnowledgeGraph, erro
 		limitClause = fmt.Sprintf(" LIMIT %d", opts.Limit)
 	}
 	L := c.labels
-	labelProps := []string{
-		"canonical_name", // Ingredient
-		"name",           // Product / HealthTopic
-		"title",          // Evidence
-		"label",          // generic
-		"topic_id",       // HealthTopic fallback
-		"evidence_id",    // Evidence fallback
-		"product_id",     // Product fallback
-		"ingredient_id",  // Ingredient fallback
+	labelProps := L.DisplayKeys
+	if len(labelProps) == 0 {
+		labelProps = legacyDisplayKeys
 	}
 	// nodeProj 把一个节点展开成 label-resolution 用的 map。
 	nodeProj := func(varName string) string {
@@ -221,8 +287,14 @@ func (c *Client) Fetch(ctx context.Context, opts Options) (*KnowledgeGraph, erro
     id: elementId(%[1]s),
     type: head([l IN labels(%[1]s) WHERE NOT l STARTS WITH '_']),
     canonical_name: %[1]s.canonical_name,
+    canonical_name_en: %[1]s.canonical_name_en,
+    canonical_name_zh: %[1]s.canonical_name_zh,
     name: %[1]s.name,
+    name_en: %[1]s.name_en,
+    name_zh: %[1]s.name_zh,
     title: %[1]s.title,
+    title_en: %[1]s.title_en,
+    title_zh: %[1]s.title_zh,
     label: %[1]s.label,
     topic_id: %[1]s.topic_id,
     evidence_id: %[1]s.evidence_id,

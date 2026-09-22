@@ -33,6 +33,26 @@ func TestFilterDirty_RemovesSentinelNodesAndLinks(t *testing.T) {
 	}
 }
 
+func TestV2LabelSetsSelectLanguageSpecificDisplayFields(t *testing.T) {
+	if got := V2EnglishLabels.DisplayKeys[0]; got != "name_en" {
+		t.Fatalf("v2 English first display key = %q, want name_en", got)
+	}
+	if got := V2ChineseLabels.DisplayKeys[0]; got != "name_zh" {
+		t.Fatalf("v2 Chinese first display key = %q, want name_zh", got)
+	}
+
+	m := map[string]any{
+		"name_en": "Vitamin A",
+		"name_zh": "维生素 A",
+	}
+	if got := resolveLabel(m, V2EnglishLabels.DisplayKeys); got != "Vitamin A" {
+		t.Fatalf("English v2 label = %q, want Vitamin A", got)
+	}
+	if got := resolveLabel(m, V2ChineseLabels.DisplayKeys); got != "维生素 A" {
+		t.Fatalf("Chinese v2 label = %q, want 维生素 A", got)
+	}
+}
+
 func TestFilterDirty_PassesThroughWhenClean(t *testing.T) {
 	kg := &KnowledgeGraph{
 		Nodes:  []GraphNode{{ID: "n1", Label: "维生素D", Type: "Ingredient"}},

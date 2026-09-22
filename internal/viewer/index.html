@@ -3,29 +3,49 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>营养健康循证分层知识图谱</title>
+<title>BeauZenith｜营养健康数字具身智能知识图谱</title>
 <style>
+  :root {
+    --bz-ink: #211b34;
+    --bz-midnight: #0b0d1b;
+    --bz-night-purple: #322b50;
+    --bz-paper: #f4efdf;
+    --bz-gold: #bd8b35;
+    --bz-gold-soft: rgba(189, 139, 53, 0.34);
+    --bz-muted: rgba(244, 239, 223, 0.72);
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; overflow: hidden; background: #0a0f1e; color: #e6ecff;
+  html, body { height: 100%; overflow: hidden; background: var(--bz-midnight); color: var(--bz-paper);
     font-family: -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
   #viewport { position: fixed; inset: 0; }
   #viewport canvas { display: block; }
-  .panel { position: fixed; background: rgba(13, 20, 40, 0.74); border: 1px solid rgba(120, 160, 255, 0.2);
+  .panel { position: fixed; background: rgba(33, 27, 52, 0.82); border: 1px solid var(--bz-gold-soft);
     border-radius: 12px; backdrop-filter: blur(10px); padding: 12px 14px; z-index: 10; }
-  #title { left: 50%; top: 16px; transform: translateX(-50%); font-size: 26px; font-weight: 700;
-    letter-spacing: 2px; color: rgba(240, 246, 255, 0.98); padding: 0; white-space: nowrap;
+  #title { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); display: flex; align-items: center;
+    gap: 11px; color: var(--bz-paper); padding: 0; white-space: nowrap; z-index: 10;
     border: none; background: none; border-radius: 0; backdrop-filter: none;
     text-shadow: 0 2px 12px rgba(0, 0, 0, 0.55); }
+  #title .brand-mark { width: 40px; height: 45px; flex: none; overflow: visible; }
+  #title .brand-mark .brand-arc { fill: none; stroke: var(--bz-paper); stroke-width: 3.5;
+    stroke-linecap: round; }
+  #title .brand-mark .brand-crossbar { stroke: var(--bz-paper); stroke-width: 3.5; stroke-linecap: round; }
+  #title .brand-mark .brand-apex { fill: var(--bz-gold); }
+  #title .brand-copy { display: flex; flex-direction: column; align-items: flex-start; }
+  #title .brand-name { display: block; font-family: "Avenir Next", "Helvetica Neue", -apple-system, sans-serif;
+    font-size: 32px; line-height: 1; font-weight: 500; letter-spacing: 0.8px;
+    color: var(--bz-paper); }
+  #title .brand-subtitle { display: block; margin-top: 6px; font-size: 14px; line-height: 1.2;
+    font-weight: 500; letter-spacing: 2px; color: rgba(244, 239, 223, 0.76); }
   #legend { right: 16px; top: 16px; min-width: 158px; }
-  #legend h3 { font-size: 12px; font-weight: 600; color: rgba(230,236,255,.75); margin-bottom: 6px; letter-spacing: 1px; }
+  #legend h3 { font-size: 12px; font-weight: 600; color: var(--bz-muted); margin-bottom: 6px; letter-spacing: 1px; }
   .legend-item { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 3px 0; }
   .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
   .legend-count { margin-left: auto; opacity: .55; font-size: 12px; font-variant-numeric: tabular-nums; }
   #controls { left: 16px; top: 16px; width: 240px; display: flex; flex-direction: column; gap: 9px; }
-  #controls .group-title { font-size: 12px; color: rgba(230,236,255,.75); letter-spacing: 1px; }
+  #controls .group-title { font-size: 12px; color: var(--bz-muted); letter-spacing: 1px; }
   #controls label { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
-  #controls label input { accent-color: #4ecdc4; }
-  #controls input[type=range] { width: 100%; accent-color: #4ecdc4; }
+  #controls label input { accent-color: var(--bz-gold); }
+  #controls input[type=range] { width: 100%; accent-color: var(--bz-gold); }
   /* 调试用的 4 个滑块:标签/数值一行,滑块另一行 */
   #controls .slider-row { display: flex; flex-direction: column; gap: 2px; cursor: default; }
   #controls .slider-row .slider-label { display: flex; justify-content: space-between; font-size: 12px; }
@@ -34,12 +54,12 @@
   #controls .dev-only { display: none; }
   #controls .dev-only.visible { display: contents; }
   .row { display: flex; gap: 8px; }
-  button { flex: 1; background: rgba(78, 205, 196, 0.14); color: #cff5f2; border: 1px solid rgba(78, 205, 196, 0.4);
+  button { flex: 1; background: rgba(189, 139, 53, 0.14); color: #f0dbb2; border: 1px solid rgba(189, 139, 53, 0.46);
     border-radius: 8px; padding: 6px 8px; font-size: 12px; cursor: pointer; transition: background .15s; }
-  button:hover { background: rgba(78, 205, 196, 0.28); }
+  button:hover { background: rgba(189, 139, 53, 0.28); }
   #stats { left: 16px; bottom: 16px; font-size: 12px; opacity: .7; font-variant-numeric: tabular-nums; }
   #tooltip { position: fixed; pointer-events: none; display: none; z-index: 30; max-width: 280px;
-    background: rgba(8, 13, 28, 0.92); border: 1px solid rgba(120, 160, 255, 0.35); padding: 6px 10px;
+    background: rgba(19, 16, 32, 0.94); border: 1px solid var(--bz-gold-soft); padding: 6px 10px;
     border-radius: 8px; font-size: 13px; box-shadow: 0 4px 18px rgba(0,0,0,.4); }
  #infoCard.hidden { display: none; }
  #infoCard { left: 16px; top: 50%; transform: translateY(-50%); width: 216px; max-width: 216px; overflow-wrap: break-word; word-break: break-word; }
@@ -47,12 +67,12 @@
   #infoType { font-size: 12px; opacity: .72; margin-top: 3px; }
   #infoId { font-size: 11px; opacity: .45; margin-top: 2px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   #infoStat { font-size: 12px; opacity: .78; margin-top: 8px; }
-  #infoDesc { font-size: 13px; line-height: 1.65; margin-top: 9px; padding-top: 9px; border-top: 1px solid rgba(120,160,255,.18); display: none; }
+  #infoDesc { font-size: 13px; line-height: 1.65; margin-top: 9px; padding-top: 9px; border-top: 1px solid rgba(189,139,53,.24); display: none; }
  #infoDesc .desc-loading { opacity: .5; }
  #infoDesc .desc-error { opacity: .55; font-size: 12px; }
  #infoProductType { font-size: 12px; opacity: .82; margin-top: 4px; display: none; }
  #infoProductType .pt-key { opacity: .6; }
- #infoIngredients { display: none; margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(120,160,255,.18); }
+ #infoIngredients { display: none; margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(189,139,53,.24); }
  #infoIngredients .ing-title { font-size: 12px; opacity: .72; margin-bottom: 6px; letter-spacing: .5px; }
  #infoIngredients .ing-list { max-height: 220px; overflow-y: auto; }
  #infoIngredients .ing-list::-webkit-scrollbar { width: 4px; }
@@ -61,14 +81,14 @@
  #infoIngredients .ing-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
  #infoIngredients .ing-amt { flex: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; opacity: .82; font-variant-numeric: tabular-nums; white-space: nowrap; }
  #infoIngredients .ing-amt.none { opacity: .35; }
-  #infoAbstract { display: none; margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(120,160,255,.18); }
+  #infoAbstract { display: none; margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(189,139,53,.24); }
   #infoAbstract .abs-title { font-size: 12px; opacity: .72; margin-bottom: 6px; letter-spacing: .5px; }
   #infoAbstract .abs-body { max-height: 168px; overflow-y: auto; font-size: 12px; line-height: 1.6; padding-right: 6px;
     white-space: pre-wrap; word-break: break-word; }
   #infoAbstract .abs-body::-webkit-scrollbar { width: 5px; }
   #infoAbstract .abs-body::-webkit-scrollbar-thumb { background: rgba(120,160,255,.28); border-radius: 3px; }
   #infoAbstract .abs-empty { opacity: .4; font-size: 12px; }
-  #infoEvidence { display: none; margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(120,160,255,.18); }
+  #infoEvidence { display: none; margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(189,139,53,.24); }
   #infoEvidence .ev-title { font-size: 12px; opacity: .72; margin-bottom: 6px; letter-spacing: .5px; }
   #infoEvidence .ev-row { font-size: 12px; line-height: 1.5; margin: 5px 0; display: flex; align-items: baseline; gap: 6px; }
   #infoEvidence .ev-key { flex: none; opacity: .6; }
@@ -81,19 +101,19 @@
   #infoEvidence .ev-source:hover { text-decoration: underline; }
   #infoEvidence .ev-empty { opacity: .4; }
 .help { position: fixed; bottom: 16px; right: 16px; font-size: 11px; opacity: .5; text-align: right; z-index: 10; line-height: 1.7; }
-  #searchPanel { left: 50%; top: 58px; transform: translateX(-50%); width: 360px; padding: 8px 10px; }
+  #searchPanel { left: 50%; top: 70px; transform: translateX(-50%); width: 360px; padding: 8px 10px; }
   .search-row { display: flex; gap: 6px; }
-  #searchTypeFilter { flex: none; background: rgba(13,20,40,.6); border: 1px solid rgba(120,160,255,.25);
-    border-radius: 8px; padding: 7px 6px; color: #e6ecff; font-size: 12px; outline: none;
+  #searchTypeFilter { flex: none; background: rgba(19,16,32,.72); border: 1px solid rgba(189,139,53,.28);
+    border-radius: 8px; padding: 7px 6px; color: var(--bz-paper); font-size: 12px; outline: none;
     font-family: inherit; cursor: pointer; }
-  #searchTypeFilter:focus { border-color: rgba(78,205,196,.5); }
-  #searchTypeFilter option { background: #0d1428; color: #e6ecff; }
+  #searchTypeFilter:focus { border-color: rgba(189,139,53,.8); }
+  #searchTypeFilter option { background: var(--bz-ink); color: var(--bz-paper); }
   .search-input-wrap { position: relative; flex: 1; min-width: 0; }
-  #searchInput { width: 100%; background: rgba(13,20,40,.6); border: 1px solid rgba(120,160,255,.25);
-    border-radius: 8px; padding: 7px 10px; color: #e6ecff; font-size: 13px; outline: none;
+  #searchInput { width: 100%; background: rgba(19,16,32,.72); border: 1px solid rgba(189,139,53,.28);
+    border-radius: 8px; padding: 7px 10px; color: var(--bz-paper); font-size: 13px; outline: none;
     font-family: inherit; padding-right: 28px; }
-  #searchInput:focus { border-color: rgba(78,205,196,.5); }
-  #searchInput::placeholder { color: rgba(230,236,255,.35); }
+  #searchInput:focus { border-color: rgba(189,139,53,.8); }
+  #searchInput::placeholder { color: rgba(244,239,223,.38); }
   #searchClear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
     display: none; width: 20px; height: 20px; padding: 0; border: none; border-radius: 50%;
     background: transparent; color: rgba(230,236,255,.4); cursor: pointer;
@@ -116,7 +136,17 @@
 <body>
 <div id="viewport"></div>
 
-<div id="title" class="panel">营养健康循证分层知识图谱</div>
+<div id="title" aria-label="BeauZenith 营养健康数字具身智能知识图谱">
+  <svg class="brand-mark" viewBox="0 0 48 54" aria-hidden="true">
+    <path class="brand-arc" d="M5 48 C10 31 14 13 24 8 C34 13 38 31 43 48" />
+    <path class="brand-crossbar" d="M11 32 H37" />
+    <circle class="brand-apex" cx="24" cy="8" r="4.8" />
+  </svg>
+  <span class="brand-copy">
+    <span class="brand-name">BeauZenith</span>
+    <span class="brand-subtitle">营养健康数字具身智能知识图谱</span>
+  </span>
+</div>
 
 <div id="searchPanel" class="panel">
   <div class="search-row">

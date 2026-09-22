@@ -14,7 +14,7 @@
 ┌────────────────────▼───────────────────────────┐
 │ Go 后端  /v1/graph/kg (handler.GraphHandler)    │
 │   └─ neo4j.Client.Fetch(limit, label)            │
-│      └─ Bolt 7687  (neo4j-go-driver/v5)         │
+│      └─ profile-selected Bolt endpoint           │
 └────────────────────┬───────────────────────────┘
                      │ Cypher
 ┌────────────────────▼───────────────────────────┐
@@ -47,13 +47,16 @@ make neo4j-down      # 停容器
 
 ## 后端 env
 
-`.env.example` 末尾追加：
+使用 `KG_GRAPH_PROFILE` 选择图谱版本和显示语言。旧版英文/中文分别连接
+M3 的 `7687` / `7688`；v2 的 `v2-en` / `v2-zh` 共用 `7689`，只切换
+`name_en` / `name_zh` 等双语属性。
 
 ```bash
-NEO4J_URI=bolt://127.0.0.1:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=neo4j-healthdinner-2026
-NEO4J_DATABASE=neo4j
+KG_GRAPH_PROFILE=v2-zh
+KG_GRAPH_V2_URI=bolt://192.168.31.201:7689
+KG_GRAPH_V2_DATABASE=neo4j
+KG_GRAPH_LEGACY_EN_URI=bolt://192.168.31.201:7687
+KG_GRAPH_LEGACY_ZH_URI=bolt://192.168.31.201:7688
 ```
 
 `NEO4J_URI` 留空 → `/v1/graph/kg` 始终 503，前端 3D 页面
