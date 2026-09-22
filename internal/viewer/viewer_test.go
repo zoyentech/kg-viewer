@@ -28,7 +28,10 @@ func TestHandler_ServesEmbeddedHTML(t *testing.T) {
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
-		`<title>营养健康循证分层知识图谱`,
+		`<title>BeauZenith｜营养健康数字具身智能知识图谱</title>`,
+		`<svg class="brand-mark"`,
+		`<span class="brand-name">BeauZenith</span>`,
+		`<span class="brand-subtitle">营养健康数字具身智能知识图谱</span>`,
 		`/v1/graph/kg`,               // live API URL
 		"three@0.160.0",              // three.js CDN version pin
 		"focus && n.id === focus.id", // animation loop must not deref null focus
