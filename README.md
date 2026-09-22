@@ -26,33 +26,27 @@ make neo4j-seed
 # 浏览器管理台 http://localhost:7474 (neo4j / neo4j-healthdinner-2026)
 ```
 
-`.env` 中配置连接信息（留空 `NEO4J_URI` 则 `/v1/graph/kg` 返回 503，
-3D 页面自动回退内置示例数据）：
+`.env` 中配置连接信息。推荐用 `KG_GRAPH_PROFILE` 切换图谱版本和显示语言：
 
-场景 A — 本地 Docker 示例：
 ```bash
-NEO4J_URI=bolt://127.0.0.1:7687
 NEO4J_USER=neo4j
 NEO4J_PASSWORD=neo4j-healthdinner-2026
-NEO4J_DATABASE=neo4j
+
+# 当前 v2：同一个 Neo4j 实例、同一个 neo4j 数据库，按 profile 选择双语字段
+KG_GRAPH_PROFILE=v2-zh
+KG_GRAPH_V2_URI=bolt://192.168.31.201:7689
+KG_GRAPH_V2_DATABASE=neo4j
+
+# 旧版 Community 实例：每种语言一个独立实例
+KG_GRAPH_LEGACY_EN_URI=bolt://192.168.31.201:7687
+KG_GRAPH_LEGACY_EN_DATABASE=neo4j
+KG_GRAPH_LEGACY_ZH_URI=bolt://192.168.31.201:7688
+KG_GRAPH_LEGACY_ZH_DATABASE=neo4j
 ```
 
-场景 B1 — M3 英文标签库（Product / Ingredient / Evidence / HealthTopic）：
-```bash
-NEO4J_URI=bolt://192.168.31.201:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=neo4j-healthdinner-2026
-NEO4J_DATABASE=neo4j
-```
-
-场景 B2 — M3 中文标签库（配方 / 成分 / 循证证据 / 健康结局）：
-```bash
-NEO4J_URI=bolt://192.168.31.201:7688
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=neo4j-healthdinner-2026
-NEO4J_DATABASE=neo4j
-DB_LANG=zh
-```
+可选 profile：`legacy-en`、`legacy-zh`、`v2-en`、`v2-zh`。
+v2 的英文和中文 profile 连接同一个 `7689` 实例，只改变节点显示字段，
+不复制成两套节点。留空 `NEO4J_URI` 且不配置 profile 时，3D 页面回退内置示例。
 
 ## API
 
@@ -78,8 +72,8 @@ DB_LANG=zh
 ```
 浏览器 /kg-viewer (Three.js)
   └─ fetch /v1/graph/kg      ← 同源
-      └─ neo4j.Client.Fetch  ← Bolt 7687
-          └─ Neo4j 5.26
+  └─ neo4j.Client.Fetch  ← profile-selected Bolt endpoint
+          └─ Neo4j Community
 ```
 
 ## 开发

@@ -19,10 +19,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	labels := neo4j.EnglishLabels
-	if cfg.IsChinese() {
-		labels = neo4j.ChineseLabels
-	}
+	labels := neo4j.LabelsFor(cfg.IsBilingual(), cfg.IsChinese())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
