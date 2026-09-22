@@ -386,7 +386,11 @@ applyGraphOffsetY(cfg.graphOffsetY);
 
 let currentData = null;
 let nodeMap = new Map();
+let nodeInstances = null;
 let linkObjs = [];
+let linkSegments = null;
+let linkColorAttr = null;
+let linkOpacityAttr = null;
 // linkProps: 按边索引(sourceId\x00targetId)缓存关系属性,用于在 info card
 // 中展示 配方→成分 的"含量"(amount)。每次 buildGraph 重建。
 let linkProps = new Map();
@@ -406,6 +410,22 @@ console.log('[kg-viewer] initial config:',
 );
 const hiddenTypes = new Set();
 const searchState = { query: '', matches: [], typeFilter: 'Product' };
+
+// 主体节点共用一个 InstancedMesh。实例矩阵/颜色是动态的，因为节点会
+// 入场缩放、聚焦放大、按谱系隐藏，以及在鼠标悬停/点击时改变高亮颜色。
+const nodeInstanceMatrix = new THREE.Matrix4();
+const nodeInstanceScale = new THREE.Vector3();
+const nodeInstanceQuaternion = new THREE.Quaternion();
+const nodeFocusColor = new THREE.Color(0xffffff);
+
+function updateNodeInstance(n, scale, visible, focused) {
+  if (!nodeInstances) return;
+  n.instanceVisible = visible;
+  nodeInstanceScale.setScalar(Math.max(scale, 0.0001));
+  nodeInstanceMatrix.compose(n.position, nodeInstanceQuaternion, nodeInstanceScale);
+  nodeInstances.setMatrixAt(n.instanceIndex, nodeInstanceMatrix);
+  nodeInstances.setColorAt(n.instanceIndex, focused ? nodeFocusColor : n.color);
+}
 
 function typeColor(type, types) {
   // 1) 用户给 5 种 Neo4j 标签分配的固定色
@@ -481,6 +501,10 @@ function makeHalo(color) {
 
 function buildGraph(data) {
   disposeGroup(nodeGroup); disposeGroup(linkGroup); disposeGroup(labelGroup); disposeGroup(ringGroup);
+  nodeInstances = null;
+  linkSegments = null;
+  linkColorAttr = null;
+  linkOpacityAttr = null;
   // 重新构图一律清掉 pin / hover（pin 节点可能已不在新图里）
   pinnedId = null; hoveredId = null; selectedId = null; focusMode = null;
   $('#infoCard').classList.add('hidden');
@@ -575,22 +599,34 @@ function buildGraph(data) {
     ringGroup.add(line);
   }
 
+  // 所有主体球体共用一个单位球几何体和一个材质；尺寸差异（如果后续
+  // 配置恢复为分层尺寸）由实例矩阵表达，不再创建逐节点 Geometry/Material。
+  const nodeGeometry = new THREE.SphereGeometry(1, 32, 24);
+  const nodeMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffffff, vertexColors: true, roughness: 0.28, metalness: 0.12,
+    emissive: 0x222222, emissiveIntensity: 1
+  });
+  nodeInstances = new THREE.InstancedMesh(nodeGeometry, nodeMaterial, nodeMap.size);
+  nodeInstances.name = 'nodeInstances';
+  // 每帧会改变实例矩阵；关闭对象级视锥裁剪，避免初始小矩阵导致
+  // 后续入场动画/聚焦放大时使用过期包围球而被错误裁掉。
+  nodeInstances.frustumCulled = false;
+  nodeInstances.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  nodeInstances.userData.isNodeInstances = true;
+  nodeInstances.userData.instanceIds = [];
+  nodeGroup.add(nodeInstances);
+
+  let instanceIndex = 0;
   for (const n of nodeMap.values()) {
     const color = typeColor(n.type, types);
-    const geo = new THREE.SphereGeometry(n.size, 32, 24);
-    const mat = new THREE.MeshStandardMaterial({
-      color, roughness: 0.28, metalness: 0.12,
-      emissive: color.clone().multiplyScalar(0.35), emissiveIntensity: 1
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(n.x, n.y, n.z);
-    mesh.userData.nodeId = n.id;
-    mesh.scale.setScalar(0.0001);
-    n.mesh = mesh;
-    n.baseEmissive = mat.emissive.clone();
+    n.position = new THREE.Vector3(n.x, n.y, n.z);
+    n.instanceIndex = instanceIndex++;
+    n.instanceMesh = nodeInstances;
+    n.instanceVisible = true;
     n.color = color;
     n.birth = performance.now() + n.depth * 90;
-    nodeGroup.add(mesh);
+    nodeInstances.userData.instanceIds[n.instanceIndex] = n.id;
+    updateNodeInstance(n, 0.0001, true, false);
 
     // 点击 hitbox：透明球，固定 2.5× 节点尺寸；让小节点（Evidence 0.65、
     // HealthTopic 0.75、Ingredient 0.70）也容易点中。visible 默认 true，
@@ -622,20 +658,64 @@ function buildGraph(data) {
     n.labelAspect = label.scale.x / label.scale.y;
     labelGroup.add(label);
   }
+  nodeInstances.instanceMatrix.needsUpdate = true;
+  if (nodeInstances.instanceColor) nodeInstances.instanceColor.needsUpdate = true;
+  nodeInstances.computeBoundingSphere();
 
+  // 所有关系共用一套位置/颜色 BufferGeometry。每条关系占两个顶点，
+  // 由 LineSegments 按 [a,b] 成对解释，避免为每条关系创建 Geometry/Line/Material。
+  const linkPositions = new Float32Array(links.length * 6);
+  const linkColors = new Float32Array(links.length * 6);
+  const linkOpacities = new Float32Array(links.length * 2);
+  let renderedLinkCount = 0;
   for (const l of links) {
     const a = nodeMap.get(l.a), b = nodeMap.get(l.b);
     if (!a || !b) continue;
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute([a.x, a.y, a.z, b.x, b.y, b.z], 3));
-    geo.setAttribute('color', new THREE.Float32BufferAttribute([
-      a.color.r, a.color.g, a.color.b, b.color.r, b.color.g, b.color.b
-    ], 3));
-    const mat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.001 });
-    const line = new THREE.Line(geo, mat);
-    linkGroup.add(line);
-    linkObjs.push({ line, mat, birth: performance.now() + Math.max(a.depth, b.depth) * 90, a, b });
+    const offset = renderedLinkCount * 6;
+    linkPositions.set([a.x, a.y, a.z, b.x, b.y, b.z], offset);
+    linkColors.set([a.color.r, a.color.g, a.color.b, b.color.r, b.color.g, b.color.b], offset);
+    linkObjs.push({
+      index: renderedLinkCount,
+      opacity: -1,
+      target: -1,
+      birth: performance.now() + Math.max(a.depth, b.depth) * 90,
+      a,
+      b,
+    });
+    renderedLinkCount++;
   }
+  const linkGeometry = new THREE.BufferGeometry();
+  linkGeometry.setAttribute('position', new THREE.Float32BufferAttribute(linkPositions, 3));
+  linkColorAttr = new THREE.BufferAttribute(linkColors, 3);
+  linkGeometry.setAttribute('color', linkColorAttr);
+  linkOpacityAttr = new THREE.BufferAttribute(linkOpacities, 1);
+  linkGeometry.setAttribute('lineOpacity', linkOpacityAttr);
+  linkGeometry.setDrawRange(0, renderedLinkCount * 2);
+  linkSegments = new THREE.LineSegments(linkGeometry, new THREE.ShaderMaterial({
+    vertexColors: true,
+    transparent: true,
+    depthWrite: false,
+    vertexShader: `
+      attribute float lineOpacity;
+      varying vec3 vLineColor;
+      varying float vLineOpacity;
+      void main() {
+        vLineColor = color;
+        vLineOpacity = lineOpacity;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vLineColor;
+      varying float vLineOpacity;
+      void main() {
+        if (vLineOpacity <= 0.001) discard;
+        gl_FragColor = vec4(vLineColor, vLineOpacity);
+      }
+    `,
+  }));
+  linkSegments.name = 'linkSegments';
+  linkGroup.add(linkSegments);
 
   {
     const maxD = nodeMap.size ? Math.max(0, ...nodeMap.values().map(n => n.depth)) : 0;
@@ -1061,18 +1141,28 @@ async function fetchNodeDetail(id) {
   }
 }
 
+function nodeIdFromIntersection(intersection) {
+  const object = intersection.object;
+  if (object === nodeInstances && Number.isInteger(intersection.instanceId)) {
+    const id = object.userData.instanceIds[intersection.instanceId];
+    const node = id ? nodeMap.get(id) : null;
+    return node && node.instanceVisible ? id : null;
+  }
+  return object.visible && object.userData.nodeId ? object.userData.nodeId : null;
+}
+
 function pickNodeId() {
   raycaster.setFromCamera(pointer, camera);
-  // 优先命中真正的网格，再回退到不可见的 hitbox，减小误触。
+  // 优先命中 InstancedMesh，再回退到不可见的 hitbox，减小误触。
   // Three.js Raycaster.intersectObjects() 不检查 object.visible —— focus 模式下
   // 隐藏的节点 / hitbox 必须自己过滤掉，否则会"穿透点击"到 lineage 外的暗区。
-  const meshHits = raycaster.intersectObjects(
-    nodeGroup.children.filter(o => o.visible && o.userData.nodeId && !o.userData.isHitbox), false);
-  const hit = meshHits.find(h => h.object.userData.nodeId);
-  if (hit) return hit.object.userData.nodeId;
+  const meshHits = nodeInstances ? raycaster.intersectObject(nodeInstances, false) : [];
+  const hit = meshHits.find(intersection => nodeIdFromIntersection(intersection));
+  if (hit) return nodeIdFromIntersection(hit);
   const hitboxHits = raycaster.intersectObjects(
     nodeGroup.children.filter(o => o.visible && o.userData.isHitbox), false);
-  return hitboxHits[0]?.object.userData.nodeId || null;
+  const hitbox = hitboxHits.find(intersection => nodeIdFromIntersection(intersection));
+  return hitbox ? nodeIdFromIntersection(hitbox) : null;
 }
 
 renderer.domElement.addEventListener('click', () => {
@@ -1123,18 +1213,15 @@ renderer.setAnimationLoop(() => {
     const visible = (!focus || reachable.has(n.id)) && !hiddenTypes.has(n.type);
     if (visible) {
       if (focus && n.id === focus.id) {
-        // 焦点：白 emissive + 放大 1.18×
-        n.mesh.visible = true;
-        n.mesh.material.emissive.setRGB(1, 1, 1);
-        n.mesh.scale.setScalar(n.size * birthScale * 1.18);
+        // 焦点：实例颜色变白 + 放大 1.18×
+        updateNodeInstance(n, n.size * birthScale * 1.18, true, true);
       } else {
-        n.mesh.visible = true;
-        n.mesh.material.emissive.copy(n.baseEmissive);
-        n.mesh.scale.setScalar(n.size * birthScale);
+        updateNodeInstance(n, n.size * birthScale, true, false);
       }
     } else {
-      // 不可见：mesh / halo / label / hitbox 全部隐藏
-      n.mesh.visible = false;
+      // InstancedMesh 本身不能逐实例设置 visible；用极小实例矩阵隐藏，
+      // 同时由 nodeIdFromIntersection() 按 instanceVisible 拦截拾取。
+      updateNodeInstance(n, 0.0001, false, false);
       n.halo.visible = false;
       n.labelSprite.visible = false;
       if (n.hitbox) n.hitbox.visible = false;
@@ -1145,11 +1232,16 @@ renderer.setAnimationLoop(() => {
     n.labelSprite.visible = cfg.showLabels;
     n.halo.scale.setScalar(n.size * (3.4 + Math.sin(now * 0.002 + n.depth) * 0.25));
     if (cfg.showLabels) {
-      const dist = camera.position.distanceTo(n.mesh.position);
+      const dist = camera.position.distanceTo(n.position);
       const worldH = (2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5))) / renderer.domElement.clientHeight * 26;
       n.labelSprite.scale.set(worldH * n.labelAspect, worldH, 1);
     }
   }
+  if (nodeInstances) {
+    nodeInstances.instanceMatrix.needsUpdate = true;
+    if (nodeInstances.instanceColor) nodeInstances.instanceColor.needsUpdate = true;
+  }
+  let linkOpacityDirty = false;
   for (const l of linkObjs) {
     const age = (now - l.birth) / 400;
     let target = 0;
@@ -1158,10 +1250,18 @@ renderer.setAnimationLoop(() => {
     } else {
       target = reachable.has(l.a.id) && reachable.has(l.b.id) ? 1 : 0;
     }
-    const visible = target > 0;
-    l.mat.opacity = age < 1 ? target * Math.min(1, age) : target;
-    l.line.visible = visible;
+    const opacity = age < 1 ? target * Math.min(1, age) : target;
+    if (opacity !== l.opacity || target !== l.target) {
+      const offset = l.index * 2;
+      const opacities = linkOpacityAttr.array;
+      opacities[offset] = opacity;
+      opacities[offset + 1] = opacity;
+      l.opacity = opacity;
+      l.target = target;
+      linkOpacityDirty = true;
+    }
   }
+  if (linkOpacityDirty && linkOpacityAttr) linkOpacityAttr.needsUpdate = true;
   if (fly) {
     fly.t = Math.min(1, fly.t + dt / 1.1);
     const e = easeInOutCubic(fly.t);
@@ -1174,8 +1274,8 @@ renderer.setAnimationLoop(() => {
   // 否则 hover tooltip 会在 focus 暗区上冒出来，造成"看似选中隐藏节点"的错觉。
   const hits = raycaster.intersectObjects(
     nodeGroup.children.filter(o => o.visible), false);
-  const hit = hits.find(h => h.object.userData.nodeId);
-  setHover(hit ? hit.object.userData.nodeId : null);
+  const hit = hits.find(intersection => nodeIdFromIntersection(intersection));
+  setHover(hit ? nodeIdFromIntersection(hit) : null);
   controls.update();
   renderer.render(scene, camera);
 });
