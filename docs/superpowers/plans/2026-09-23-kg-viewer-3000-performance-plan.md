@@ -111,7 +111,7 @@
 - Modify: `internal/viewer/viewer_test.go`
 
 **Interfaces:**
-- `MAX_VISIBLE_LABELS = 320`: high-scale label budget.
+- `MAX_VISIBLE_LABELS = 96`: high-scale label budget.
 - `syncLabelLOD(force)`: selects labels using focus/hover/search priority and camera distance.
 - `maybeUpdateHover(now)`: runs raycast only when dirty and no more than 30Hz.
 - `configureRenderQuality(nodeCount)`: selects pixel ratio cap.
