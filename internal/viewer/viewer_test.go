@@ -38,10 +38,12 @@ func TestHandler_ServesEmbeddedHTML(t *testing.T) {
 		"function pickNodeId()",      // click raycast path is wired up
 		"hitboxInstances",            // transparent picking is batched
 		"new THREE.InstancedMesh",    //主体球体按实例批处理
-		"nodeInstances.instanceMatrix.setUsage(THREE.DynamicDrawUsage)",
+		"const NODE_LAYER_TYPES = ['Product', 'Ingredient', 'Evidence', 'HealthTopic'];",
+		"function makeNodeLayerMaterial(type)", // four legend-colored shared materials
+		"nodeLayerMeshes",             // body meshes are partitioned by node type
+		"nodeLayerMesh.setColorAt",    // each layer keeps instance-level amount/focus color
 		"intersection.instanceId",    //实例拾取映射回节点 ID
-		"nodeInstances.setColorAt",   //实例级别保留节点颜色/焦点高亮
-		"raycaster.intersectObject(nodeInstances, false)",
+		"raycaster.intersectObjects(nodeLayerMeshes, false)",
 		"new THREE.LineSegments",     // relationships share one draw object
 		"lineOpacity",                // shader-backed per-edge visibility
 		"lineBirth",                  // shader-backed edge fade-in
@@ -51,7 +53,7 @@ func TestHandler_ServesEmbeddedHTML(t *testing.T) {
 		"nodeVisualsDirty",           // steady-state instances are not uploaded each frame
 		"nodeIdFromIntersection",     // instance picking maps back to graph IDs
 		"raycaster.intersectObject(hitboxInstances, false)",
-		"if (nodeVisualsDirty && nodeInstances)",
+		"for (const nodeLayerMesh of nodeLayerMeshes)",
 		"window.__KG_VIEWER_DEBUG__",
 		"renderer.info.render.calls",
 		"const SEARCH_TYPE_ORDER = ['Product', 'Ingredient', 'HealthTopic'];",

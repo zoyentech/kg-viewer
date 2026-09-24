@@ -299,6 +299,10 @@ const TYPE_COLORS = {
   Evidence:    '#96ceb4', // 鼠尾草
 };
 
+// 主体节点按图例固定拆成 4 个材质层；未知类型仍由 buildGraph 追加兜底层。
+// 每个层只有一个 InstancedMesh，避免回退到每节点一个 Mesh 的高 draw-call 路径。
+const NODE_LAYER_TYPES = ['Product', 'Ingredient', 'Evidence', 'HealthTopic'];
+
 // 每层球体大小：节点多 → 球小一点，避免同环上互相盖住
 const LAYER_SIZES = {
   0: 1.0,   // Product
@@ -396,7 +400,8 @@ applyGraphOffsetY(cfg.graphOffsetY);
 
 let currentData = null;
 let nodeMap = new Map();
-let nodeInstances = null;
+let nodeInstances = null; // 兼容旧调试引用：指向第一个主体层
+let nodeLayerMeshes = [];
 let hitboxInstances = null;
 let haloPoints = null;
 let linkSegments = null;
@@ -492,8 +497,24 @@ function colorsEqual(a, b) {
   return a && b && a.r === b.r && a.g === b.g && a.b === b.b;
 }
 
+function makeNodeLayerMaterial(type) {
+  const material = new THREE.MeshStandardMaterial({
+    // InstancedMesh.instanceColor stores the full legend/amount color. A
+    // white base keeps that color intact under Three.js's standard instance
+    // color path instead of multiplying it into a muddy brown.
+    color: 0xffffff,
+    roughness: 0.28,
+    metalness: 0.12,
+    emissive: 0x222222,
+    emissiveIntensity: 1,
+  });
+  material.userData.nodeType = type;
+  material.userData.legendColor = TYPE_COLORS[type] || null;
+  return material;
+}
+
 function syncNodeInstance(n, scale, visible, focused, force = false) {
-  if (!nodeInstances || !hitboxInstances) return false;
+  if (!n.nodeLayerMesh || !hitboxInstances) return false;
   const nextScale = Math.max(Number(scale) || 0, 0.0001);
   const nextColor = focused ? nodeFocusColor : n.renderColor;
   const colorChanged = !colorsEqual(n.instanceColor, nextColor);
@@ -504,8 +525,9 @@ function syncNodeInstance(n, scale, visible, focused, force = false) {
 
   nodeInstanceScale.setScalar(nextScale);
   nodeInstanceMatrix.compose(n.position, nodeInstanceQuaternion, nodeInstanceScale);
-  nodeInstances.setMatrixAt(n.instanceIndex, nodeInstanceMatrix);
-  nodeInstances.setColorAt(n.instanceIndex, nextColor);
+  const nodeLayerMesh = n.nodeLayerMesh;
+  nodeLayerMesh.setMatrixAt(n.nodeLayerIndex, nodeInstanceMatrix);
+  nodeLayerMesh.setColorAt(n.nodeLayerIndex, nextColor);
 
   const hitboxScale = visible ? n.hitboxScale : 0.0001;
   nodeInstanceScale.setScalar(hitboxScale);
@@ -537,9 +559,11 @@ function syncNodeInstance(n, scale, visible, focused, force = false) {
 }
 
 function syncNodeBuffers() {
-  if (nodeVisualsDirty && nodeInstances) {
-    nodeInstances.instanceMatrix.needsUpdate = true;
-    if (nodeInstances.instanceColor) nodeInstances.instanceColor.needsUpdate = true;
+  if (nodeVisualsDirty) {
+    for (const nodeLayerMesh of nodeLayerMeshes) {
+      nodeLayerMesh.instanceMatrix.needsUpdate = true;
+      if (nodeLayerMesh.instanceColor) nodeLayerMesh.instanceColor.needsUpdate = true;
+    }
   }
   if (nodeVisualsDirty && hitboxInstances) hitboxInstances.instanceMatrix.needsUpdate = true;
   if (haloVisualsDirty && haloPoints) {
@@ -589,12 +613,21 @@ function applyRecipeAmountVisuals(productId) {
 }
 
 function disposeGroup(g) {
+  const geometries = new Set();
+  const materials = new Set();
   while (g.children.length) {
     const c = g.children.pop();
-    if (c.geometry) c.geometry.dispose();
+    if (c.geometry && !geometries.has(c.geometry)) {
+      geometries.add(c.geometry);
+      c.geometry.dispose();
+    }
     const mats = Array.isArray(c.material) ? c.material : [c.material];
-    for (const m of mats) if (m && m.map) m.map.dispose();
-    for (const m of mats) if (m) m.dispose();
+    for (const m of mats) {
+      if (!m || materials.has(m)) continue;
+      materials.add(m);
+      if (m.map) m.map.dispose();
+      m.dispose();
+    }
   }
 }
 
@@ -703,7 +736,7 @@ function buildGraph(data) {
   pinnedId = null; hoveredId = null; selectedId = null; focusMode = null;
   $('#infoCard').classList.add('hidden');
   tooltip.style.display = 'none';
-  nodeInstances = null; hitboxInstances = null; haloPoints = null; linkSegments = null;
+  nodeInstances = null; nodeLayerMeshes = []; hitboxInstances = null; haloPoints = null; linkSegments = null;
   nodeMap = new Map(); linkRecords = []; linkProps = new Map();
   nodeVisualsDirty = true; haloVisualsDirty = true; linkVisualsDirty = true; labelLodDirty = true;
   cachedFocus = null; focusDirty = true; lastStatsKey = '';
@@ -798,16 +831,35 @@ function buildGraph(data) {
   }
 
   const nodeGeometry = new THREE.SphereGeometry(1, 16, 12);
-  const nodeMaterial = new THREE.MeshStandardMaterial({
-    color: 0xffffff, vertexColors: true, roughness: 0.28, metalness: 0.12,
-    emissive: 0x222222, emissiveIntensity: 1,
-  });
-  nodeInstances = new THREE.InstancedMesh(nodeGeometry, nodeMaterial, nodeMap.size);
-  nodeInstances.name = 'nodeInstances';
-  nodeInstances.frustumCulled = false;
-  nodeInstances.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  nodeInstances.userData.instanceIds = [];
-  nodeGroup.add(nodeInstances);
+  const nodeRecords = [...nodeMap.values()];
+  const extraLayerTypes = [...new Set(nodeRecords.map(n => n.type))]
+    .filter(type => !NODE_LAYER_TYPES.includes(type)).sort();
+  const layerTypes = [...NODE_LAYER_TYPES, ...extraLayerTypes];
+  const nodesByLayer = new Map(layerTypes.map(type => [type, []]));
+  for (const n of nodeRecords) nodesByLayer.get(n.type).push(n);
+  for (const type of layerTypes) {
+    const members = nodesByLayer.get(type);
+    if (!members.length) continue;
+    const nodeLayerMesh = new THREE.InstancedMesh(
+      nodeGeometry,
+      makeNodeLayerMaterial(type),
+      members.length
+    );
+    nodeLayerMesh.name = `nodeInstances:${type}`;
+    nodeLayerMesh.frustumCulled = false;
+    nodeLayerMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    nodeLayerMesh.userData.nodeType = type;
+    nodeLayerMesh.userData.instanceIds = [];
+    nodeLayerMeshes.push(nodeLayerMesh);
+    nodeGroup.add(nodeLayerMesh);
+    members.forEach((n, nodeLayerIndex) => {
+      n.nodeLayerMesh = nodeLayerMesh;
+      n.nodeLayerIndex = nodeLayerIndex;
+    });
+  }
+  // Keep the old reference for diagnostics/extensions; rendering and picking
+  // always iterate all typed layer meshes below.
+  nodeInstances = nodeLayerMeshes[0] || null;
 
   const hitboxGeometry = new THREE.SphereGeometry(1, 8, 6);
   const hitboxMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
@@ -822,7 +874,6 @@ function buildGraph(data) {
   const haloColors = new Float32Array(nodeMap.size * 3);
   const haloSizes = new Float32Array(nodeMap.size);
   const haloPhases = new Float32Array(nodeMap.size);
-  const nodeRecords = [...nodeMap.values()];
   const buildNow = performance.now();
   nodeRecords.forEach((n, index) => {
     const color = typeColor(n.type, types);
@@ -840,7 +891,7 @@ function buildGraph(data) {
     n.instanceColor = new THREE.Color();
     n.hitboxScale = Math.max(n.size * 2.5, 1.4);
     n.birth = buildNow + n.depth * 90;
-    nodeInstances.userData.instanceIds[index] = n.id;
+    n.nodeLayerMesh.userData.instanceIds[n.nodeLayerIndex] = n.id;
     hitboxInstances.userData.instanceIds[index] = n.id;
     haloPositions[index * 3] = n.x;
     haloPositions[index * 3 + 1] = n.y;
@@ -1404,7 +1455,7 @@ async function fetchNodeDetail(id) {
 
 function nodeIdFromIntersection(intersection) {
   const object = intersection.object;
-  if ((object === nodeInstances || object === hitboxInstances) && Number.isInteger(intersection.instanceId)) {
+  if ((nodeLayerMeshes.includes(object) || object === hitboxInstances) && Number.isInteger(intersection.instanceId)) {
     const id = object.userData.instanceIds[intersection.instanceId];
     const node = id ? nodeMap.get(id) : null;
     return node && node.instanceVisible ? id : null;
@@ -1417,7 +1468,7 @@ function pickNodeId() {
   // 优先命中主体实例，再回退到批量 hitbox，减小误触。
   // Three.js Raycaster.intersectObjects() 不检查 object.visible —— focus 模式下
   // 隐藏的节点 / hitbox 必须自己过滤掉，否则会"穿透点击"到 lineage 外的暗区。
-  const meshHits = nodeInstances ? raycaster.intersectObject(nodeInstances, false) : [];
+  const meshHits = nodeLayerMeshes.length ? raycaster.intersectObjects(nodeLayerMeshes, false) : [];
   const meshHit = meshHits.find(intersection => nodeIdFromIntersection(intersection));
   if (meshHit) return nodeIdFromIntersection(meshHit);
   const hitboxHits = hitboxInstances ? raycaster.intersectObject(hitboxInstances, false) : [];
@@ -1482,7 +1533,7 @@ function maybeUpdateHover(now) {
   if (!pointerDirty && !cameraDirty && now - lastHoverPickAt < HOVER_PICK_INTERVAL_MS) return;
   if (now - lastHoverPickAt < HOVER_PICK_INTERVAL_MS && !pointerDirty) return;
   raycaster.setFromCamera(pointer, camera);
-  const meshHits = nodeInstances ? raycaster.intersectObject(nodeInstances, false) : [];
+  const meshHits = nodeLayerMeshes.length ? raycaster.intersectObjects(nodeLayerMeshes, false) : [];
   const meshHit = meshHits.find(intersection => nodeIdFromIntersection(intersection));
   const hit = meshHit || (hitboxInstances ? raycaster.intersectObject(hitboxInstances, false)
     .find(intersection => nodeIdFromIntersection(intersection)) : null);
@@ -1533,7 +1584,10 @@ window.__KG_VIEWER_DEBUG__ = {
     return {
       nodeCount: nodeMap.size,
       linkCount: linkRecords.length,
-      batched: Boolean(nodeInstances && hitboxInstances && linkSegments && haloPoints),
+      batched: Boolean(nodeLayerMeshes.length && hitboxInstances && linkSegments && haloPoints),
+      nodeLayerCount: nodeLayerMeshes.length,
+      nodeLayerTypes: nodeLayerMeshes.map(mesh => mesh.userData.nodeType),
+      nodeLayerMaterialColors: nodeLayerMeshes.map(mesh => mesh.material.userData.legendColor || null),
       labelCount: [...nodeMap.values()].filter(n => n.labelSprite && n.labelSprite.visible).length,
       selectedId,
       focusedId: pinnedId,
