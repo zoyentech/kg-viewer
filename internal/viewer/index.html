@@ -971,15 +971,14 @@ const TYPE_LABELS_CN = {
   HealthTopic: '健康结局',
   Evidence: '循证证据',
 };
+const SEARCH_TYPE_ORDER = ['Product', 'Ingredient', 'HealthTopic'];
 
 function renderSearchTypeFilter(data) {
   const sel = $('#searchTypeFilter');
   const counts = {};
   for (const n of data.nodes) counts[n.type ?? 'default'] = (counts[n.type ?? 'default'] || 0) + 1;
   const types = Object.assign({}, SAMPLE.types, data.types || {});
-  const order = Object.keys(TYPE_DEPTHS);
-  const extra = Object.keys(counts).filter(t => !order.includes(t)).sort();
-  const allOrdered = [...order, ...extra];
+  const allOrdered = SEARCH_TYPE_ORDER.filter(t => counts[t]);
   const prev = sel.value;
   sel.innerHTML = '';
   for (const t of allOrdered) {
@@ -1049,9 +1048,9 @@ function performSearch(query) {
   renderSearchResults(searchState.matches, types);
 }
 
-// 搜索结果下拉的显示/隐藏由聚焦/点击控制，与 query 是否为空解耦。
+// 搜索结果下拉只在用户输入非空查询时显示。
 function showSearchResults() {
-  // 重新按当前 query + typeFilter 渲染（query 为空时即"该 type 的全部节点"）
+  // 重新按当前 query + typeFilter 渲染；空查询由 renderSearchResults 隐藏。
   performSearch($('#searchInput').value);
 }
 function hideSearchResults() {
@@ -1060,6 +1059,11 @@ function hideSearchResults() {
 
 function renderSearchResults(matches, types) {
   const el = $('#searchResults');
+  if (!searchState.query) {
+    el.innerHTML = '';
+    el.style.display = 'none';
+    return;
+  }
   if (!matches.length) {
     el.innerHTML = '<div style="padding:8px;font-size:12px;opacity:.5;text-align:center;">无匹配结果</div>';
     el.style.display = 'block';
