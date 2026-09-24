@@ -1,5 +1,6 @@
 # Binaries
 bin/
+.context/
 *.exe
 /import
 /server

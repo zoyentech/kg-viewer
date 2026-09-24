@@ -299,6 +299,10 @@ const TYPE_COLORS = {
   Evidence:    '#96ceb4', // 鼠尾草
 };
 
+// 主体节点按图例固定拆成 4 个材质层；未知类型仍由 buildGraph 追加兜底层。
+// 每个层只有一个 InstancedMesh，避免回退到每节点一个 Mesh 的高 draw-call 路径。
+const NODE_LAYER_TYPES = ['Product', 'Ingredient', 'Evidence', 'HealthTopic'];
+
 // 每层球体大小：节点多 → 球小一点，避免同环上互相盖住
 const LAYER_SIZES = {
   0: 1.0,   // Product
@@ -311,6 +315,14 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 $('#viewport').appendChild(renderer.domElement);
+
+function configureRenderQuality(nodeCount) {
+  const pixelRatioCap = nodeCount > 1800 ? 1.5 : 2;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, pixelRatioCap));
+  if (haloPoints && haloPoints.material.uniforms.uPixelRatio) {
+    haloPoints.material.uniforms.uPixelRatio.value = renderer.getPixelRatio();
+  }
+}
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0a0f1e);
@@ -344,6 +356,8 @@ controls.maxDistance = 180;
 // 视野距离滑块与 OrbitControls 双向同步:滚轮缩放会触发 change,
 // 把当前「相机到 target 的距离」写回滑块(取整 + 限位,旋转时距离不变故不刷屏)。
 controls.addEventListener('change', () => {
+  cameraDirty = true;
+  pointerDirty = true;
   const dist = camera.position.distanceTo(controls.target);
   const clamped = Math.round(Math.max(controls.minDistance, Math.min(controls.maxDistance, dist)));
   const slider = document.getElementById('cameraRadius');
@@ -386,11 +400,12 @@ applyGraphOffsetY(cfg.graphOffsetY);
 
 let currentData = null;
 let nodeMap = new Map();
-let nodeInstances = null;
-let linkObjs = [];
+let nodeInstances = null; // 兼容旧调试引用：指向第一个主体层
+let nodeLayerMeshes = [];
+let hitboxInstances = null;
+let haloPoints = null;
 let linkSegments = null;
-let linkColorAttr = null;
-let linkOpacityAttr = null;
+let linkRecords = [];
 // linkProps: 按边索引(sourceId\x00targetId)缓存关系属性,用于在 info card
 // 中展示 配方→成分 的"含量"(amount)。每次 buildGraph 重建。
 let linkProps = new Map();
@@ -399,6 +414,22 @@ let selectedId = null;       // 节点 id，仅用于 info card
 let pinnedId = null;         // 点击锁住的高亮（持续显示，相机不动）
 let focusMode = null;        // null | 'lineage'
 let fly = null;
+let nodeVisualsDirty = true;
+let haloVisualsDirty = true;
+let linkVisualsDirty = true;
+let labelLodDirty = true;
+let pointerDirty = true;
+let cameraDirty = true;
+let lastHoverPickAt = 0;
+let cachedFocus = null;
+let focusDirty = true;
+let lastStatsKey = '';
+let lastDiagnosticsAt = 0;
+const MAX_VISIBLE_LABELS = 96;
+const LABEL_LOD_THRESHOLD = 900;
+const LABEL_LOD_INTERVAL_MS = 150;
+const HOVER_PICK_INTERVAL_MS = 33;
+let lastLabelLodAt = 0;
 // 初始默认配置日志(页面加载即可见当前 bake 进去的默认值)——必须在 cfg 定义之后
 console.log('[kg-viewer] initial config:',
   'layerSpacing=' + cfg.layerSpacing,
@@ -410,22 +441,6 @@ console.log('[kg-viewer] initial config:',
 );
 const hiddenTypes = new Set();
 const searchState = { query: '', matches: [], typeFilter: 'Product' };
-
-// 主体节点共用一个 InstancedMesh。实例矩阵/颜色是动态的，因为节点会
-// 入场缩放、聚焦放大、按谱系隐藏，以及在鼠标悬停/点击时改变高亮颜色。
-const nodeInstanceMatrix = new THREE.Matrix4();
-const nodeInstanceScale = new THREE.Vector3();
-const nodeInstanceQuaternion = new THREE.Quaternion();
-const nodeFocusColor = new THREE.Color(0xffffff);
-
-function updateNodeInstance(n, scale, visible, focused) {
-  if (!nodeInstances) return;
-  n.instanceVisible = visible;
-  nodeInstanceScale.setScalar(Math.max(scale, 0.0001));
-  nodeInstanceMatrix.compose(n.position, nodeInstanceQuaternion, nodeInstanceScale);
-  nodeInstances.setMatrixAt(n.instanceIndex, nodeInstanceMatrix);
-  nodeInstances.setColorAt(n.instanceIndex, focused ? nodeFocusColor : n.color);
-}
 
 function typeColor(type, types) {
   // 1) 用户给 5 种 Neo4j 标签分配的固定色
@@ -445,13 +460,174 @@ function typeLabel(type, types) {
   return t ? t.label : String(type);
 }
 
+const nodeInstanceMatrix = new THREE.Matrix4();
+const nodeInstanceScale = new THREE.Vector3();
+const nodeInstanceQuaternion = new THREE.Quaternion();
+const nodeFocusColor = new THREE.Color(0xffffff);
+
+// 将常见的质量单位统一为 mg。范围值取首尾平均值，无法解析时返回 null，
+// 这样缺失 amount 的关系不会被误当成 0 mg 参与比例竞争。
+function parseAmountMg(value) {
+  if (value == null || String(value).trim() === '') return null;
+  const raw = String(value).replace(/,/g, '').trim();
+  const numbers = raw.match(/[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/gi);
+  if (!numbers || !numbers.length) return null;
+  const parsed = numbers.slice(0, 2).map(Number).filter(Number.isFinite);
+  if (!parsed.length) return null;
+  const amount = parsed.length > 1 ? (parsed[0] + parsed[1]) / 2 : parsed[0];
+  const lower = raw.toLowerCase();
+  const unit = lower.match(/千克|公斤|kg|毫克|mg|微克|mcg|μg|ug|克|g/);
+  if (!unit) return amount;
+  switch (unit[0]) {
+    case '千克': case '公斤': case 'kg': return amount * 1000000;
+    case '克': case 'g': return amount * 1000;
+    case '微克': case 'mcg': case 'μg': case 'ug': return amount / 1000;
+    default: return amount;
+  }
+}
+
+function amountVisualFactor(share, maxShare) {
+  const normalized = share > 0 && maxShare > 0
+    ? Math.min(1, Math.sqrt(share / maxShare))
+    : 0;
+  return 0.72 + normalized * 1.35;
+}
+
+function colorsEqual(a, b) {
+  return a && b && a.r === b.r && a.g === b.g && a.b === b.b;
+}
+
+function makeNodeLayerMaterial(type) {
+  const material = new THREE.MeshStandardMaterial({
+    // InstancedMesh.instanceColor stores the full legend/amount color. A
+    // white base keeps that color intact under Three.js's standard instance
+    // color path instead of multiplying it into a muddy brown.
+    color: 0xffffff,
+    roughness: 0.28,
+    metalness: 0.12,
+    emissive: 0x222222,
+    emissiveIntensity: 1,
+  });
+  material.userData.nodeType = type;
+  material.userData.legendColor = TYPE_COLORS[type] || null;
+  return material;
+}
+
+function syncNodeInstance(n, scale, visible, focused, force = false) {
+  if (!n.nodeLayerMesh || !hitboxInstances) return false;
+  const nextScale = Math.max(Number(scale) || 0, 0.0001);
+  const nextColor = focused ? nodeFocusColor : n.renderColor;
+  const colorChanged = !colorsEqual(n.instanceColor, nextColor);
+  const changed = force || n.instanceScale !== nextScale ||
+    n.instanceVisible !== visible || n.instanceFocused !== focused || colorChanged;
+  n.instanceVisible = visible;
+  if (!changed) return false;
+
+  nodeInstanceScale.setScalar(nextScale);
+  nodeInstanceMatrix.compose(n.position, nodeInstanceQuaternion, nodeInstanceScale);
+  const nodeLayerMesh = n.nodeLayerMesh;
+  nodeLayerMesh.setMatrixAt(n.nodeLayerIndex, nodeInstanceMatrix);
+  nodeLayerMesh.setColorAt(n.nodeLayerIndex, nextColor);
+
+  const hitboxScale = visible ? n.hitboxScale : 0.0001;
+  nodeInstanceScale.setScalar(hitboxScale);
+  nodeInstanceMatrix.compose(n.position, nodeInstanceQuaternion, nodeInstanceScale);
+  hitboxInstances.setMatrixAt(n.instanceIndex, nodeInstanceMatrix);
+
+  n.instanceScale = nextScale;
+  n.instanceFocused = focused;
+  n.instanceColor.copy(nextColor);
+  nodeVisualsDirty = true;
+  if (haloPoints) {
+    const haloIndex = n.instanceIndex;
+    const haloSize = haloPoints.geometry.getAttribute('haloSize');
+    const haloColor = haloPoints.geometry.getAttribute('haloColor');
+    const nextHaloSize = visible ? n.renderScale * (focused ? 3.9 : 3.4) : 0;
+    if (haloSize.array[haloIndex] !== nextHaloSize) {
+      haloSize.array[haloIndex] = nextHaloSize;
+      haloVisualsDirty = true;
+    }
+    const colorOffset = haloIndex * 3;
+    if (haloColor.array[colorOffset] !== nextColor.r || haloColor.array[colorOffset + 1] !== nextColor.g || haloColor.array[colorOffset + 2] !== nextColor.b) {
+      haloColor.array[colorOffset] = nextColor.r;
+      haloColor.array[colorOffset + 1] = nextColor.g;
+      haloColor.array[colorOffset + 2] = nextColor.b;
+      haloVisualsDirty = true;
+    }
+  }
+  return true;
+}
+
+function syncNodeBuffers() {
+  if (nodeVisualsDirty) {
+    for (const nodeLayerMesh of nodeLayerMeshes) {
+      nodeLayerMesh.instanceMatrix.needsUpdate = true;
+      if (nodeLayerMesh.instanceColor) nodeLayerMesh.instanceColor.needsUpdate = true;
+    }
+  }
+  if (nodeVisualsDirty && hitboxInstances) hitboxInstances.instanceMatrix.needsUpdate = true;
+  if (haloVisualsDirty && haloPoints) {
+    for (const name of ['haloSize', 'haloColor']) {
+      const attribute = haloPoints.geometry.getAttribute(name);
+      if (attribute) attribute.needsUpdate = true;
+    }
+  }
+  nodeVisualsDirty = false;
+  haloVisualsDirty = false;
+}
+
+function applyRecipeAmountVisuals(productId) {
+  let activeProduct = productId ? nodeMap.get(productId) : null;
+  if (!activeProduct || String(activeProduct.type).toLowerCase() !== 'product') activeProduct = null;
+  for (const n of nodeMap.values()) {
+    n.amountShare = 0;
+    n.renderScale = n.baseSize;
+    n.renderColor.copy(n.baseColor);
+  }
+  if (!activeProduct) {
+    nodeVisualsDirty = true;
+    haloVisualsDirty = true;
+    labelLodDirty = true;
+    return;
+  }
+
+  const amounts = [];
+  for (const link of linkRecords) {
+    if (link.a !== activeProduct || String(link.b.type).toLowerCase() !== 'ingredient') continue;
+    const amount = parseAmountMg(link.props && link.props.amount);
+    if (amount != null && amount > 0) amounts.push({ node: link.b, amount });
+  }
+  const total = amounts.reduce((sum, entry) => sum + entry.amount, 0);
+  const maxAmount = amounts.reduce((max, entry) => Math.max(max, entry.amount), 0);
+  if (total > 0 && maxAmount > 0) {
+    for (const { node, amount } of amounts) {
+      const share = amount / total;
+      node.amountShare = share;
+      node.renderScale = node.baseSize * amountVisualFactor(share, maxAmount / total);
+      node.renderColor.copy(node.baseColor).lerp(nodeFocusColor, 0.2 + 0.55 * Math.sqrt(share / (maxAmount / total)));
+    }
+  }
+  nodeVisualsDirty = true;
+  haloVisualsDirty = true;
+  labelLodDirty = true;
+}
+
 function disposeGroup(g) {
+  const geometries = new Set();
+  const materials = new Set();
   while (g.children.length) {
     const c = g.children.pop();
-    if (c.geometry) c.geometry.dispose();
+    if (c.geometry && !geometries.has(c.geometry)) {
+      geometries.add(c.geometry);
+      c.geometry.dispose();
+    }
     const mats = Array.isArray(c.material) ? c.material : [c.material];
-    for (const m of mats) if (m && m.map) m.map.dispose();
-    for (const m of mats) if (m) m.dispose();
+    for (const m of mats) {
+      if (!m || materials.has(m)) continue;
+      materials.add(m);
+      if (m.map) m.map.dispose();
+      m.dispose();
+    }
   }
 }
 
@@ -482,34 +658,88 @@ function makeLabelSprite(text, colorHex) {
   return sp;
 }
 
-function makeHalo(color) {
-  const size = 128;
-  const cvs = document.createElement('canvas');
-  cvs.width = cvs.height = size;
-  const ctx = cvs.getContext('2d');
-  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  g.addColorStop(0, 'rgba(255,255,255,0.5)');
-  g.addColorStop(0.35, 'rgba(255,255,255,0.16)');
-  g.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, size, size);
-  const tex = new THREE.CanvasTexture(cvs);
-  return new THREE.Sprite(new THREE.SpriteMaterial({
-    map: tex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, color
-  }));
+function makeHaloMaterial() {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    uniforms: { uTime: { value: 0 }, uPixelRatio: { value: Math.min(window.devicePixelRatio || 1, 2) } },
+    vertexShader: `
+      attribute vec3 haloColor;
+      attribute float haloSize;
+      attribute float haloPhase;
+      varying vec3 vHaloColor;
+      varying float vHaloVisible;
+      uniform float uTime;
+      uniform float uPixelRatio;
+      void main() {
+        vHaloColor = haloColor;
+        vHaloVisible = step(0.001, haloSize);
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        float pulse = 1.0 + 0.07 * sin(uTime * 0.002 + haloPhase);
+        gl_PointSize = clamp(haloSize * pulse * uPixelRatio * (260.0 / max(1.0, -mvPosition.z)), 0.0, 72.0);
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vHaloColor;
+      varying float vHaloVisible;
+      void main() {
+        if (vHaloVisible < 0.5) discard;
+        vec2 p = gl_PointCoord - vec2(0.5);
+        float distanceFromCenter = length(p);
+        float alpha = smoothstep(0.5, 0.05, distanceFromCenter) * 0.32;
+        if (alpha < 0.01) discard;
+        gl_FragColor = vec4(vHaloColor, alpha);
+      }
+    `,
+  });
+}
+
+function makeLinkMaterial() {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    uniforms: { uTime: { value: 0 } },
+    vertexShader: `
+      attribute vec3 color;
+      attribute float lineOpacity;
+      attribute float lineBirth;
+      varying vec3 vLineColor;
+      varying float vLineOpacity;
+      varying float vLineBirth;
+      void main() {
+        vLineColor = color;
+        vLineOpacity = lineOpacity;
+        vLineBirth = lineBirth;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vLineColor;
+      varying float vLineOpacity;
+      varying float vLineBirth;
+      uniform float uTime;
+      void main() {
+        float fade = clamp((uTime - vLineBirth) / 400.0, 0.0, 1.0);
+        float alpha = vLineOpacity * fade * 0.82;
+        if (alpha < 0.005) discard;
+        gl_FragColor = vec4(vLineColor, alpha);
+      }
+    `,
+  });
 }
 
 function buildGraph(data) {
   disposeGroup(nodeGroup); disposeGroup(linkGroup); disposeGroup(labelGroup); disposeGroup(ringGroup);
-  nodeInstances = null;
-  linkSegments = null;
-  linkColorAttr = null;
-  linkOpacityAttr = null;
   // 重新构图一律清掉 pin / hover（pin 节点可能已不在新图里）
   pinnedId = null; hoveredId = null; selectedId = null; focusMode = null;
   $('#infoCard').classList.add('hidden');
   tooltip.style.display = 'none';
-  nodeMap = new Map(); linkObjs = []; linkProps = new Map();
+  nodeInstances = null; nodeLayerMeshes = []; hitboxInstances = null; haloPoints = null; linkSegments = null;
+  nodeMap = new Map(); linkRecords = []; linkProps = new Map();
+  nodeVisualsDirty = true; haloVisualsDirty = true; linkVisualsDirty = true; labelLodDirty = true;
+  cachedFocus = null; focusDirty = true; lastStatsKey = '';
 
   const types = Object.assign({}, SAMPLE.types, data.types || {});
   const nodes = (data.nodes || []).map(n => ({
@@ -534,6 +764,7 @@ function buildGraph(data) {
     a.children.push(l.b);
     b.parents.push(l.a);
     if (l.props) linkProps.set(l.a + '\x00' + l.b, l.props);
+    linkRecords.push({ a, b, props: l.props || null, birth: 0, index: linkRecords.length });
   }
 
   // 1) depth 直接按 TYPE_DEPTHS 排，未知 type 放最后（fallback 槽位递增）
@@ -599,129 +830,189 @@ function buildGraph(data) {
     ringGroup.add(line);
   }
 
-  // 所有主体球体共用一个单位球几何体和一个材质；尺寸差异（如果后续
-  // 配置恢复为分层尺寸）由实例矩阵表达，不再创建逐节点 Geometry/Material。
-  const nodeGeometry = new THREE.SphereGeometry(1, 32, 24);
-  const nodeMaterial = new THREE.MeshStandardMaterial({
-    color: 0xffffff, vertexColors: true, roughness: 0.28, metalness: 0.12,
-    emissive: 0x222222, emissiveIntensity: 1
-  });
-  nodeInstances = new THREE.InstancedMesh(nodeGeometry, nodeMaterial, nodeMap.size);
-  nodeInstances.name = 'nodeInstances';
-  // 每帧会改变实例矩阵；关闭对象级视锥裁剪，避免初始小矩阵导致
-  // 后续入场动画/聚焦放大时使用过期包围球而被错误裁掉。
-  nodeInstances.frustumCulled = false;
-  nodeInstances.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  nodeInstances.userData.isNodeInstances = true;
-  nodeInstances.userData.instanceIds = [];
-  nodeGroup.add(nodeInstances);
+  const nodeGeometry = new THREE.SphereGeometry(1, 16, 12);
+  const nodeRecords = [...nodeMap.values()];
+  const extraLayerTypes = [...new Set(nodeRecords.map(n => n.type))]
+    .filter(type => !NODE_LAYER_TYPES.includes(type)).sort();
+  const layerTypes = [...NODE_LAYER_TYPES, ...extraLayerTypes];
+  const nodesByLayer = new Map(layerTypes.map(type => [type, []]));
+  for (const n of nodeRecords) nodesByLayer.get(n.type).push(n);
+  for (const type of layerTypes) {
+    const members = nodesByLayer.get(type);
+    if (!members.length) continue;
+    const nodeLayerMesh = new THREE.InstancedMesh(
+      nodeGeometry,
+      makeNodeLayerMaterial(type),
+      members.length
+    );
+    nodeLayerMesh.name = `nodeInstances:${type}`;
+    nodeLayerMesh.frustumCulled = false;
+    nodeLayerMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    nodeLayerMesh.userData.nodeType = type;
+    nodeLayerMesh.userData.instanceIds = [];
+    nodeLayerMeshes.push(nodeLayerMesh);
+    nodeGroup.add(nodeLayerMesh);
+    members.forEach((n, nodeLayerIndex) => {
+      n.nodeLayerMesh = nodeLayerMesh;
+      n.nodeLayerIndex = nodeLayerIndex;
+    });
+  }
+  // Keep the old reference for diagnostics/extensions; rendering and picking
+  // always iterate all typed layer meshes below.
+  nodeInstances = nodeLayerMeshes[0] || null;
 
-  let instanceIndex = 0;
-  for (const n of nodeMap.values()) {
+  const hitboxGeometry = new THREE.SphereGeometry(1, 8, 6);
+  const hitboxMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+  hitboxInstances = new THREE.InstancedMesh(hitboxGeometry, hitboxMaterial, nodeMap.size);
+  hitboxInstances.name = 'hitboxInstances';
+  hitboxInstances.frustumCulled = false;
+  hitboxInstances.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  hitboxInstances.userData.instanceIds = [];
+  nodeGroup.add(hitboxInstances);
+
+  const haloPositions = new Float32Array(nodeMap.size * 3);
+  const haloColors = new Float32Array(nodeMap.size * 3);
+  const haloSizes = new Float32Array(nodeMap.size);
+  const haloPhases = new Float32Array(nodeMap.size);
+  const buildNow = performance.now();
+  nodeRecords.forEach((n, index) => {
     const color = typeColor(n.type, types);
     n.position = new THREE.Vector3(n.x, n.y, n.z);
-    n.instanceIndex = instanceIndex++;
-    n.instanceMesh = nodeInstances;
+    n.baseSize = n.size;
+    n.baseColor = color.clone();
+    n.color = n.baseColor;
+    n.renderScale = n.size;
+    n.renderColor = color.clone();
+    n.amountShare = 0;
+    n.instanceIndex = index;
     n.instanceVisible = true;
-    n.color = color;
-    n.birth = performance.now() + n.depth * 90;
-    nodeInstances.userData.instanceIds[n.instanceIndex] = n.id;
-    updateNodeInstance(n, 0.0001, true, false);
+    n.instanceFocused = false;
+    n.instanceScale = NaN;
+    n.instanceColor = new THREE.Color();
+    n.hitboxScale = Math.max(n.size * 2.5, 1.4);
+    n.birth = buildNow + n.depth * 90;
+    n.nodeLayerMesh.userData.instanceIds[n.nodeLayerIndex] = n.id;
+    hitboxInstances.userData.instanceIds[index] = n.id;
+    haloPositions[index * 3] = n.x;
+    haloPositions[index * 3 + 1] = n.y;
+    haloPositions[index * 3 + 2] = n.z;
+    haloColors[index * 3] = color.r;
+    haloColors[index * 3 + 1] = color.g;
+    haloColors[index * 3 + 2] = color.b;
+    haloSizes[index] = n.size * 3.4;
+    haloPhases[index] = n.depth * 0.9 + index * 0.017;
+    syncNodeInstance(n, 0.0001, true, false, true);
+  });
 
-    // 点击 hitbox：透明球，固定 2.5× 节点尺寸；让小节点（Evidence 0.65、
-    // HealthTopic 0.75、Ingredient 0.70）也容易点中。visible 默认 true，
-    // 但 material opacity=0 + depthWrite=false 所以不渲染。
-    const hitGeo = new THREE.SphereGeometry(1, 12, 8);
-    const hitMat = new THREE.MeshBasicMaterial({
-      transparent: true, opacity: 0, depthWrite: false,
-    });
-    const hitbox = new THREE.Mesh(hitGeo, hitMat);
-    hitbox.scale.setScalar(Math.max(n.size * 2.5, 1.4));
-    hitbox.position.set(n.x, n.y, n.z);
-    hitbox.userData.nodeId = n.id;
-    hitbox.userData.isHitbox = true;
-    hitbox.renderOrder = -1;  // 先画（虽然看不见）
-    n.hitbox = hitbox;
-    nodeGroup.add(hitbox);
+  const haloGeometry = new THREE.BufferGeometry();
+  haloGeometry.setAttribute('position', new THREE.BufferAttribute(haloPositions, 3));
+  haloGeometry.setAttribute('haloColor', new THREE.BufferAttribute(haloColors, 3));
+  haloGeometry.setAttribute('haloSize', new THREE.BufferAttribute(haloSizes, 1));
+  haloGeometry.setAttribute('haloPhase', new THREE.BufferAttribute(haloPhases, 1));
+  haloPoints = new THREE.Points(haloGeometry, makeHaloMaterial());
+  haloPoints.name = 'haloPoints';
+  haloPoints.frustumCulled = false;
+  nodeGroup.add(haloPoints);
+  configureRenderQuality(nodeMap.size);
 
-    const halo = makeHalo(color);
-    halo.position.set(n.x, n.y, n.z);
-    halo.scale.setScalar(n.size * 3.4);
-    halo.userData.nodeId = n.id;
-    halo.userData.isHalo = true;
-    n.halo = halo;
-    nodeGroup.add(halo);
-
-    const label = makeLabelSprite(n.label, '#' + color.getHexString());
-    label.position.set(n.x, n.y + n.size * 2.15, n.z);
-    n.labelSprite = label;
-    n.labelAspect = label.scale.x / label.scale.y;
-    labelGroup.add(label);
-  }
-  nodeInstances.instanceMatrix.needsUpdate = true;
-  if (nodeInstances.instanceColor) nodeInstances.instanceColor.needsUpdate = true;
-  nodeInstances.computeBoundingSphere();
-
-  // 所有关系共用一套位置/颜色 BufferGeometry。每条关系占两个顶点，
-  // 由 LineSegments 按 [a,b] 成对解释，避免为每条关系创建 Geometry/Line/Material。
-  const linkPositions = new Float32Array(links.length * 6);
-  const linkColors = new Float32Array(links.length * 6);
-  const linkOpacities = new Float32Array(links.length * 2);
-  let renderedLinkCount = 0;
-  for (const l of links) {
-    const a = nodeMap.get(l.a), b = nodeMap.get(l.b);
-    if (!a || !b) continue;
-    const offset = renderedLinkCount * 6;
-    linkPositions.set([a.x, a.y, a.z, b.x, b.y, b.z], offset);
-    linkColors.set([a.color.r, a.color.g, a.color.b, b.color.r, b.color.g, b.color.b], offset);
-    linkObjs.push({
-      index: renderedLinkCount,
-      opacity: -1,
-      target: -1,
-      birth: performance.now() + Math.max(a.depth, b.depth) * 90,
-      a,
-      b,
-    });
-    renderedLinkCount++;
-  }
+  const positions = new Float32Array(linkRecords.length * 6);
+  const colors = new Float32Array(linkRecords.length * 6);
+  const opacities = new Float32Array(linkRecords.length * 2);
+  const births = new Float32Array(linkRecords.length * 2);
+  linkRecords.forEach((link, index) => {
+    const offset = index * 6;
+    positions.set([link.a.x, link.a.y, link.a.z, link.b.x, link.b.y, link.b.z], offset);
+    colors.set([link.a.baseColor.r, link.a.baseColor.g, link.a.baseColor.b,
+      link.b.baseColor.r, link.b.baseColor.g, link.b.baseColor.b], offset);
+    link.birth = buildNow + Math.max(link.a.depth, link.b.depth) * 90;
+    opacities[index * 2] = 1;
+    opacities[index * 2 + 1] = 1;
+    births[index * 2] = link.birth;
+    births[index * 2 + 1] = link.birth;
+  });
   const linkGeometry = new THREE.BufferGeometry();
-  linkGeometry.setAttribute('position', new THREE.Float32BufferAttribute(linkPositions, 3));
-  linkColorAttr = new THREE.BufferAttribute(linkColors, 3);
-  linkGeometry.setAttribute('color', linkColorAttr);
-  linkOpacityAttr = new THREE.BufferAttribute(linkOpacities, 1);
-  linkGeometry.setAttribute('lineOpacity', linkOpacityAttr);
-  linkGeometry.setDrawRange(0, renderedLinkCount * 2);
-  linkSegments = new THREE.LineSegments(linkGeometry, new THREE.ShaderMaterial({
-    vertexColors: true,
-    transparent: true,
-    depthWrite: false,
-    vertexShader: `
-      attribute float lineOpacity;
-      varying vec3 vLineColor;
-      varying float vLineOpacity;
-      void main() {
-        vLineColor = color;
-        vLineOpacity = lineOpacity;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: `
-      varying vec3 vLineColor;
-      varying float vLineOpacity;
-      void main() {
-        if (vLineOpacity <= 0.001) discard;
-        gl_FragColor = vec4(vLineColor, vLineOpacity);
-      }
-    `,
-  }));
+  linkGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  linkGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  linkGeometry.setAttribute('lineOpacity', new THREE.BufferAttribute(opacities, 1));
+  linkGeometry.setAttribute('lineBirth', new THREE.BufferAttribute(births, 1));
+  linkSegments = new THREE.LineSegments(linkGeometry, makeLinkMaterial());
   linkSegments.name = 'linkSegments';
+  linkSegments.frustumCulled = false;
   linkGroup.add(linkSegments);
+  syncNodeBuffers();
 
   {
     const maxD = nodeMap.size ? Math.max(0, ...nodeMap.values().map(n => n.depth)) : 0;
     const typeSet = new Set([...nodeMap.values()].map(n => n.type));
-    $('#stats').textContent = `${nodeMap.size} 节点 · ${linkObjs.length} 条关系 · ${typeSet.size} 种类型 · ${maxD + 1} 层`;
+    $('#stats').textContent = `${nodeMap.size} 节点 · ${linkRecords.length} 条关系 · ${typeSet.size} 种类型 · ${maxD + 1} 层`;
   }
+}
+
+function disposeNodeLabel(n) {
+  if (!n.labelSprite) return;
+  labelGroup.remove(n.labelSprite);
+  const material = n.labelSprite.material;
+  if (material && material.map) material.map.dispose();
+  if (material) material.dispose();
+  n.labelSprite = null;
+}
+
+function ensureNodeLabel(n) {
+  if (n.labelSprite) return n.labelSprite;
+  const label = makeLabelSprite(n.label, '#' + n.renderColor.getHexString());
+  label.position.set(n.x, n.y + n.renderScale * 2.15, n.z);
+  n.labelSprite = label;
+  n.labelAspect = label.scale.x / label.scale.y;
+  labelGroup.add(label);
+  return label;
+}
+
+function syncLabelLOD(force = false, now = performance.now()) {
+  if (!cfg.showLabels) {
+    labelGroup.visible = false;
+    cameraDirty = false;
+    labelLodDirty = false;
+    return;
+  }
+  if (!force && !labelLodDirty && (!cameraDirty || now - lastLabelLodAt < LABEL_LOD_INTERVAL_MS)) return;
+  labelGroup.visible = true;
+  const focus = computeFocus();
+  const reachable = focus ? focus.reachable : null;
+  const priorityIds = new Set([selectedId, hoveredId, pinnedId].filter(Boolean));
+  for (const n of searchState.matches.slice(0, 12)) priorityIds.add(n.id);
+  let candidates;
+  if (nodeMap.size <= LABEL_LOD_THRESHOLD) {
+    candidates = [...nodeMap.values()];
+  } else {
+    candidates = [...nodeMap.values()]
+      .filter(n => !reachable || reachable.has(n.id))
+      .sort((a, b) => {
+        const aPriority = priorityIds.has(a.id) ? 1 : 0;
+        const bPriority = priorityIds.has(b.id) ? 1 : 0;
+        if (aPriority !== bPriority) return bPriority - aPriority;
+        return camera.position.distanceTo(a.position) - camera.position.distanceTo(b.position);
+      })
+      .slice(0, MAX_VISIBLE_LABELS);
+  }
+  const candidateIds = new Set(candidates.map(n => n.id));
+  for (const n of nodeMap.values()) {
+    const visible = candidateIds.has(n.id) && (!reachable || reachable.has(n.id)) && !hiddenTypes.has(n.type);
+    if (!visible) {
+      if (nodeMap.size > LABEL_LOD_THRESHOLD || hiddenTypes.has(n.type)) disposeNodeLabel(n);
+      else if (n.labelSprite) n.labelSprite.visible = false;
+      continue;
+    }
+    const label = ensureNodeLabel(n);
+    label.visible = true;
+    label.position.set(n.x, n.y + n.renderScale * 2.15, n.z);
+    const dist = camera.position.distanceTo(n.position);
+    const worldH = (2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5))) /
+      Math.max(renderer.domElement.clientHeight, 1) * 26;
+    label.scale.set(worldH * n.labelAspect, worldH, 1);
+  }
+  labelLodDirty = false;
+  cameraDirty = false;
+  lastLabelLodAt = now;
 }
 
 // 中文 label（如果有就用，否则直接用 type 名）
@@ -787,6 +1078,9 @@ function toggleType(type) {
   document.querySelectorAll('.legend-item').forEach(el => {
     if (el.dataset.type === type) el.classList.toggle('dimmed', hiddenTypes.has(type));
   });
+  nodeVisualsDirty = true;
+  linkVisualsDirty = true;
+  labelLodDirty = true;
 }
 
 // --- Search: live filter nodes by label + type ---
@@ -801,6 +1095,7 @@ function performSearch(query) {
     })
     .sort((a, b) => a.label.localeCompare(b.label))
     .slice(0, 50);
+  labelLodDirty = true;
   renderSearchResults(searchState.matches, types);
 }
 
@@ -851,6 +1146,7 @@ const tooltip = $('#tooltip');
 window.addEventListener('pointermove', e => {
   pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
   pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+  pointerDirty = true;
   tooltip.style.left = (e.clientX + 16) + 'px';
   tooltip.style.top = (e.clientY + 16) + 'px';
 });
@@ -858,6 +1154,7 @@ window.addEventListener('pointermove', e => {
 function setHover(id) {
   if (id === hoveredId) return;
   hoveredId = id;
+  labelLodDirty = true;
   // tooltip 一直显示（pin 时也允许看 hover label），但视觉由动画循环按
   // focus = pin || hover 统一算
   if (id && nodeMap.has(id)) {
@@ -875,7 +1172,12 @@ function setHover(id) {
 // 子孙 = 沿 children 向下遍历（不横向扩散到兄弟节点）。
 // hover 不参与高亮决策（只显示 tooltip），Esc / 空白 click 稳定复位。
 function computeFocus() {
-  if (!pinnedId || !nodeMap.has(pinnedId)) return null;
+  if (!focusDirty) return cachedFocus;
+  focusDirty = false;
+  if (!pinnedId || !nodeMap.has(pinnedId)) {
+    cachedFocus = null;
+    return cachedFocus;
+  }
   const id = pinnedId;
   const n = nodeMap.get(id);
   const relevant = new Set([id]);
@@ -896,7 +1198,8 @@ function computeFocus() {
     relevant.add(cur);
     for (const c of nodeMap.get(cur).children) queue.push(c);
   }
-  return { id, n, reachable: relevant, mode: 'lineage' };
+  cachedFocus = { id, n, reachable: relevant, mode: 'lineage' };
+  return cachedFocus;
 }
 
 function selectNode(id) {
@@ -916,6 +1219,11 @@ function selectNode(id) {
     hoveredId = null;
     tooltip.style.display = 'none';
   }
+  focusDirty = true;
+  applyRecipeAmountVisuals(id && nodeMap.has(id) ? id : null);
+  nodeVisualsDirty = true;
+  linkVisualsDirty = true;
+  labelLodDirty = true;
   const card = $('#infoCard');
   const types = Object.assign({}, SAMPLE.types, currentData?.types || {});
   if (!id || !nodeMap.has(id)) {
@@ -924,7 +1232,7 @@ function selectNode(id) {
   }
   const n = nodeMap.get(id);
   $('#infoName').textContent = n.label;
-  $('#infoName').style.color = '#' + n.color.getHexString();
+  $('#infoName').style.color = '#' + n.renderColor.getHexString();
   $('#infoType').textContent = `类型：${typeLabel(n.type, types)}`;
   $('#infoId').textContent = `id: ${n.id}`;
  $('#infoStat').textContent = `${n.children.length} 个子节点 · ${n.parents.length} 个父节点 · 深度 ${n.depth}`;
@@ -996,7 +1304,7 @@ function renderProductExtras(n) {
     const name = document.createElement('span');
     name.className = 'ing-name';
     name.textContent = c.label;
-    name.style.color = '#' + c.color.getHexString();
+    name.style.color = '#' + c.renderColor.getHexString();
     const amt = amountOf(n.id, c.id);
     const amtEl = document.createElement('span');
     amtEl.className = 'ing-amt' + (amt ? '' : ' none');
@@ -1147,26 +1455,25 @@ async function fetchNodeDetail(id) {
 
 function nodeIdFromIntersection(intersection) {
   const object = intersection.object;
-  if (object === nodeInstances && Number.isInteger(intersection.instanceId)) {
+  if ((nodeLayerMeshes.includes(object) || object === hitboxInstances) && Number.isInteger(intersection.instanceId)) {
     const id = object.userData.instanceIds[intersection.instanceId];
     const node = id ? nodeMap.get(id) : null;
     return node && node.instanceVisible ? id : null;
   }
-  return object.visible && object.userData.nodeId ? object.userData.nodeId : null;
+  return object.visible && object.userData && object.userData.nodeId ? object.userData.nodeId : null;
 }
 
 function pickNodeId() {
   raycaster.setFromCamera(pointer, camera);
-  // 优先命中 InstancedMesh，再回退到不可见的 hitbox，减小误触。
+  // 优先命中主体实例，再回退到批量 hitbox，减小误触。
   // Three.js Raycaster.intersectObjects() 不检查 object.visible —— focus 模式下
   // 隐藏的节点 / hitbox 必须自己过滤掉，否则会"穿透点击"到 lineage 外的暗区。
-  const meshHits = nodeInstances ? raycaster.intersectObject(nodeInstances, false) : [];
-  const hit = meshHits.find(intersection => nodeIdFromIntersection(intersection));
-  if (hit) return nodeIdFromIntersection(hit);
-  const hitboxHits = raycaster.intersectObjects(
-    nodeGroup.children.filter(o => o.visible && o.userData.isHitbox), false);
-  const hitbox = hitboxHits.find(intersection => nodeIdFromIntersection(intersection));
-  return hitbox ? nodeIdFromIntersection(hitbox) : null;
+  const meshHits = nodeLayerMeshes.length ? raycaster.intersectObjects(nodeLayerMeshes, false) : [];
+  const meshHit = meshHits.find(intersection => nodeIdFromIntersection(intersection));
+  if (meshHit) return nodeIdFromIntersection(meshHit);
+  const hitboxHits = hitboxInstances ? raycaster.intersectObject(hitboxInstances, false) : [];
+  const hitboxHit = hitboxHits.find(intersection => nodeIdFromIntersection(intersection));
+  return hitboxHit ? nodeIdFromIntersection(hitboxHit) : null;
 }
 
 renderer.domElement.addEventListener('click', () => {
@@ -1184,105 +1491,129 @@ const easeOutBack = t => {
 };
 const easeInOutCubic = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
 
-const clock = new THREE.Clock();
-renderer.setAnimationLoop(() => {
-  const dt = Math.min(clock.getDelta(), 0.05);
-  const now = performance.now();
-  // 高亮策略（click 节点 → 仅祖先+子孙链亮起，其它全部隐藏）：
-  //   focus.reachable  → 节点 + halo + label 可见，emissive 保持原色
-  //   focus 自身       → 额外 emissive 白色 + 1.18× scale
-  //   不在 reachable    → mesh.visible / halo.visible / label.visible = false
-  //   边两端都在 reachable → opacity 1.0；否则 0
-  const focus = computeFocus();
-  const reachable = focus ? focus.reachable : null;
-  // 实时 stats：focus 变化时显示谱系子图规模
-  if (focus) {
-    {
-    const maxD = nodeMap.size ? Math.max(0, ...nodeMap.values().map(n => n.depth)) : 0;
-    const typeSet = new Set([...nodeMap.values()].map(n => n.type));
-    const label = `谱系子图 ${reachable.size} 节点`;
-    $('#stats').textContent = `${nodeMap.size} 节点 · ${linkObjs.length} 条关系 · ${typeSet.size} 种类型 · ${maxD + 1} 层 · ${label}`;
+function syncLinkVisibility(focus, reachable) {
+  if (!linkSegments || !linkVisualsDirty) return;
+  const attribute = linkSegments.geometry.getAttribute('lineOpacity');
+  for (const link of linkRecords) {
+    const visible = !focus
+      ? !hiddenTypes.has(link.a.type) && !hiddenTypes.has(link.b.type)
+      : reachable.has(link.a.id) && reachable.has(link.b.id);
+    const value = visible ? 1 : 0;
+    attribute.array[link.index * 2] = value;
+    attribute.array[link.index * 2 + 1] = value;
   }
-  } else if ($('#stats').textContent.includes('子图')) {
-    // 复位时去掉子图统计
-    {
-    const maxD = nodeMap.size ? Math.max(0, ...nodeMap.values().map(n => n.depth)) : 0;
-    const typeSet = new Set([...nodeMap.values()].map(n => n.type));
-    $('#stats').textContent = `${nodeMap.size} 节点 · ${linkObjs.length} 条关系 · ${typeSet.size} 种类型 · ${maxD + 1} 层`;
-  }
-  }
+  attribute.needsUpdate = true;
+  linkVisualsDirty = false;
+}
+
+function updateGraphStats(focus) {
+  const maxD = nodeMap.size ? Math.max(0, ...nodeMap.values().map(n => n.depth)) : 0;
+  const typeSet = new Set([...nodeMap.values()].map(n => n.type));
+  const focusKey = focus ? `${focus.id}:${focus.reachable.size}` : 'none';
+  if (focusKey === lastStatsKey) return;
+  lastStatsKey = focusKey;
+  const lineage = focus ? ` · 谱系子图 ${focus.reachable.size} 节点` : '';
+  $('#stats').textContent = `${nodeMap.size} 节点 · ${linkRecords.length} 条关系 · ${typeSet.size} 种类型 · ${maxD + 1} 层${lineage}`;
+}
+
+function updateNodeVisuals(now, focus, reachable) {
   for (const n of nodeMap.values()) {
     const age = (now - n.birth) / 500;
     const birthScale = age < 1 ? easeOutBack(Math.min(1, age)) : 1;
     const visible = (!focus || reachable.has(n.id)) && !hiddenTypes.has(n.type);
-    if (visible) {
-      if (focus && n.id === focus.id) {
-        // 焦点：实例颜色变白 + 放大 1.18×
-        updateNodeInstance(n, n.size * birthScale * 1.18, true, true);
-      } else {
-        updateNodeInstance(n, n.size * birthScale, true, false);
-      }
-    } else {
-      // InstancedMesh 本身不能逐实例设置 visible；用极小实例矩阵隐藏，
-      // 同时由 nodeIdFromIntersection() 按 instanceVisible 拦截拾取。
-      updateNodeInstance(n, 0.0001, false, false);
-      n.halo.visible = false;
-      n.labelSprite.visible = false;
-      if (n.hitbox) n.hitbox.visible = false;
-      continue;
-    }
-    n.halo.visible = true;
-    if (n.hitbox) n.hitbox.visible = true;
-    n.labelSprite.visible = cfg.showLabels;
-    n.halo.scale.setScalar(n.size * (3.4 + Math.sin(now * 0.002 + n.depth) * 0.25));
-    if (cfg.showLabels) {
-      const dist = camera.position.distanceTo(n.position);
-      const worldH = (2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5))) / renderer.domElement.clientHeight * 26;
-      n.labelSprite.scale.set(worldH * n.labelAspect, worldH, 1);
-    }
+    const focused = Boolean(focus && n.id === focus.id);
+    const scale = visible ? n.renderScale * birthScale * (focused ? 1.18 : 1) : 0.0001;
+    syncNodeInstance(n, scale, visible, focused);
   }
-  if (nodeInstances) {
-    nodeInstances.instanceMatrix.needsUpdate = true;
-    if (nodeInstances.instanceColor) nodeInstances.instanceColor.needsUpdate = true;
-  }
-  let linkOpacityDirty = false;
-  for (const l of linkObjs) {
-    const age = (now - l.birth) / 400;
-    let target = 0;
-    if (!focus) {
-      target = (hiddenTypes.has(l.a.type) || hiddenTypes.has(l.b.type)) ? 0 : 1;
-    } else {
-      target = reachable.has(l.a.id) && reachable.has(l.b.id) ? 1 : 0;
-    }
-    const opacity = age < 1 ? target * Math.min(1, age) : target;
-    if (opacity !== l.opacity || target !== l.target) {
-      const offset = l.index * 2;
-      const opacities = linkOpacityAttr.array;
-      opacities[offset] = opacity;
-      opacities[offset + 1] = opacity;
-      l.opacity = opacity;
-      l.target = target;
-      linkOpacityDirty = true;
-    }
-  }
-  if (linkOpacityDirty && linkOpacityAttr) linkOpacityAttr.needsUpdate = true;
+  syncNodeBuffers();
+  if (haloPoints) haloPoints.material.uniforms.uTime.value = now;
+}
+
+function maybeUpdateHover(now) {
+  if (!pointerDirty && !cameraDirty && now - lastHoverPickAt < HOVER_PICK_INTERVAL_MS) return;
+  if (now - lastHoverPickAt < HOVER_PICK_INTERVAL_MS && !pointerDirty) return;
+  raycaster.setFromCamera(pointer, camera);
+  const meshHits = nodeLayerMeshes.length ? raycaster.intersectObjects(nodeLayerMeshes, false) : [];
+  const meshHit = meshHits.find(intersection => nodeIdFromIntersection(intersection));
+  const hit = meshHit || (hitboxInstances ? raycaster.intersectObject(hitboxInstances, false)
+    .find(intersection => nodeIdFromIntersection(intersection)) : null);
+  setHover(hit ? nodeIdFromIntersection(hit) : null);
+  pointerDirty = false;
+  lastHoverPickAt = now;
+}
+
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const now = performance.now();
   if (fly) {
     fly.t = Math.min(1, fly.t + dt / 1.1);
     const e = easeInOutCubic(fly.t);
     camera.position.lerpVectors(fly.from, fly.to, e);
     controls.target.lerpVectors(fly.cFrom, fly.cTo, e);
     if (fly.t >= 1) fly = null;
+    cameraDirty = true;
+    pointerDirty = true;
   }
-  raycaster.setFromCamera(pointer, camera);
-  // 同 pickNodeId()：Three.js Raycaster 不查 object.visible，必须自己过滤，
-  // 否则 hover tooltip 会在 focus 暗区上冒出来，造成"看似选中隐藏节点"的错觉。
-  const hits = raycaster.intersectObjects(
-    nodeGroup.children.filter(o => o.visible), false);
-  const hit = hits.find(intersection => nodeIdFromIntersection(intersection));
-  setHover(hit ? nodeIdFromIntersection(hit) : null);
   controls.update();
+  const focus = computeFocus();
+  const reachable = focus ? focus.reachable : null;
+  updateGraphStats(focus);
+  updateNodeVisuals(now, focus, reachable);
+  syncLinkVisibility(focus, reachable);
+  if (linkSegments) linkSegments.material.uniforms.uTime.value = now;
+  syncLabelLOD();
+  maybeUpdateHover(now);
   renderer.render(scene, camera);
+  if (now - lastDiagnosticsAt > 1000) {
+    lastDiagnosticsAt = now;
+    console.debug('[kg-viewer] render diagnostics', {
+      nodes: nodeMap.size,
+      links: linkRecords.length,
+      calls: renderer.info.render.calls,
+      triangles: renderer.info.render.triangles,
+      lines: renderer.info.render.lines,
+    });
+  }
 });
+
+// 非侵入式验证钩子：只暴露只读快照，方便本地性能回归和浏览器验收，
+// 不参与渲染路径，也不改变用户界面。
+window.__KG_VIEWER_DEBUG__ = {
+  snapshot() {
+    return {
+      nodeCount: nodeMap.size,
+      linkCount: linkRecords.length,
+      batched: Boolean(nodeLayerMeshes.length && hitboxInstances && linkSegments && haloPoints),
+      nodeLayerCount: nodeLayerMeshes.length,
+      nodeLayerTypes: nodeLayerMeshes.map(mesh => mesh.userData.nodeType),
+      nodeLayerMaterialColors: nodeLayerMeshes.map(mesh => mesh.material.userData.legendColor || null),
+      labelCount: [...nodeMap.values()].filter(n => n.labelSprite && n.labelSprite.visible).length,
+      selectedId,
+      focusedId: pinnedId,
+      renderer: {
+        calls: renderer.info.render.calls,
+        triangles: renderer.info.render.triangles,
+        lines: renderer.info.render.lines,
+        geometries: renderer.info.memory.geometries,
+      },
+    };
+  },
+  node(id) {
+    const n = nodeMap.get(id);
+    if (!n) return null;
+    return {
+      id: n.id,
+      type: n.type,
+      amountShare: n.amountShare,
+      scale: n.renderScale,
+      color: n.renderColor.getHexString(),
+    };
+  },
+  load(data) {
+    loadJSON(JSON.stringify(data));
+  },
+};
 
 function loadJSON(text) {
   try {
@@ -1299,8 +1630,13 @@ function loadJSON(text) {
   }
 }
 
-$('#toggleRotate').addEventListener('change', e => { controls.autoRotate = e.target.checked; });
-$('#toggleLabels').addEventListener('change', e => { cfg.showLabels = e.target.checked; labelGroup.visible = cfg.showLabels; });
+$('#toggleRotate').addEventListener('change', e => { controls.autoRotate = e.target.checked; cameraDirty = true; pointerDirty = true; });
+$('#toggleLabels').addEventListener('change', e => {
+  cfg.showLabels = e.target.checked;
+  labelLodDirty = true;
+  cameraDirty = true;
+  syncLabelLOD(true);
+});
 // 调试滑块:每次改动都在控制台打印当前值,方便用户复制新默认值
 function logConfigChange(key, value, extra) {
   const tail = extra ? ' ' + extra : '';
@@ -1346,6 +1682,8 @@ $('#cameraRadius').addEventListener('input', e => {
   // 限制在 OrbitControls 的 minDistance / maxDistance 之内
   const clamped = Math.max(controls.minDistance, Math.min(controls.maxDistance, r));
   camera.position.copy(controls.target).add(dir.multiplyScalar(clamped));
+  cameraDirty = true;
+  pointerDirty = true;
   if (clamped !== r) {
     e.target.value = clamped;
     $('#cameraRadiusVal').textContent = clamped;
@@ -1359,6 +1697,8 @@ $('#resetView').addEventListener('click', () => {
   $('#graphOffsetY').value = GRAPH_OFFSET_Y_DEFAULT;
   $('#graphOffsetYVal').textContent = GRAPH_OFFSET_Y_DEFAULT.toFixed(1);
   applyGraphOffsetY(GRAPH_OFFSET_Y_DEFAULT);
+  cameraDirty = true;
+  pointerDirty = true;
   $('#cameraRadius').value = INIT_CAMERA_RADIUS;
   $('#cameraRadiusVal').textContent = String(INIT_CAMERA_RADIUS);
 });
@@ -1417,6 +1757,10 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  configureRenderQuality(nodeMap.size);
+  cameraDirty = true;
+  pointerDirty = true;
+  labelLodDirty = true;
 });
 
 const qParams = new URLSearchParams(location.search);
