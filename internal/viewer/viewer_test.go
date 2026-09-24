@@ -41,6 +41,9 @@ func TestHandler_ServesEmbeddedHTML(t *testing.T) {
 		"intersection.instanceId",  //实例拾取映射回节点 ID
 		"nodeInstances.setColorAt", //实例级别保留节点颜色/焦点高亮
 		"raycaster.intersectObject(nodeInstances, false)",
+		"const SEARCH_TYPE_ORDER = ['Product', 'Ingredient', 'HealthTopic'];",
+		"const allOrdered = SEARCH_TYPE_ORDER.filter(t => counts[t]);",
+		"if (!searchState.query) {", //空查询不展示搜索结果下拉
 		"new THREE.LineSegments", //关系边统一批处理
 		"linkGeometry.setAttribute('position'",
 		"linkColorAttr = new THREE.BufferAttribute", //关系颜色统一存放在批量 BufferGeometry

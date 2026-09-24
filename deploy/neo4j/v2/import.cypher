@@ -68,18 +68,6 @@ CALL {
       n.data_version = 'v2'
 } IN TRANSACTIONS OF 500 ROWS;
 
-// Preserve orphan evidence references as explicit, reviewable placeholders.
-// They are completed by the ingredients.csv import when a matching row exists.
-LOAD CSV WITH HEADERS FROM 'file:///evidence_links.csv' AS row
-CALL {
-  WITH row
-  MERGE (n:Ingredient {ingredient_id: row.ingredient_id})
-  ON CREATE SET n.name_en = '[missing ingredient] ' + row.ingredient_id,
-                n.name_zh = '[缺少成分记录] ' + row.ingredient_id,
-                n.data_quality = 'missing_from_ingredients_csv',
-                n.data_version = 'v2'
-} IN TRANSACTIONS OF 500 ROWS;
-
 LOAD CSV WITH HEADERS FROM 'file:///product_ingredients.csv' AS row
 CALL {
   WITH row
