@@ -25,7 +25,7 @@ func main() {
 	// to built-in sample data.
 	var graphLoader handler.GraphLoader
 	if cfg.Neo4jURI != "" {
-		labels := neo4j.LabelsFor(cfg.IsBilingual(), cfg.IsChinese())
+		labels := neo4j.LabelsForProfile(cfg.GraphProfile, cfg.IsChinese())
 		if cfg.IsBilingual() {
 			log.Infof("Using bilingual graph schema (profile=%s, lang=%s)", cfg.GraphProfile, cfg.GraphLanguage)
 		} else if cfg.IsChinese() {
