@@ -19,6 +19,7 @@ type LabelSet struct {
 	EvidenceContext string // EN: "EvidenceContext"  ZH: "证据上下文"
 	Evidence        string // EN: "Evidence"          ZH: "循证证据"
 	HealthTopic     string // EN: "HealthTopic"       ZH: "健康结局"
+	Outcome         string // EN: "Outcome"           ZH: "健康结局"
 	DisplayKeys     []string
 }
 
@@ -61,6 +62,34 @@ var v2ChineseDisplayKeys = []string{
 	"ingredient_id",
 }
 
+var v3EnglishDisplayKeys = []string{
+	"name_en",
+	"canonical_name",
+	"title_en",
+	"title",
+	"name",
+	"label",
+	"outcome_id",
+	"evidence_id",
+	"product_id",
+	"ingredient_id",
+	"name_zh",
+}
+
+var v3ChineseDisplayKeys = []string{
+	"name_zh",
+	"title_zh",
+	"name_en",
+	"canonical_name",
+	"title",
+	"name",
+	"label",
+	"outcome_id",
+	"evidence_id",
+	"product_id",
+	"ingredient_id",
+}
+
 // EnglishLabels targets the M3 :7687 database (nutrition-evidence-kg).
 var EnglishLabels = LabelSet{
 	EvidenceContext: "EvidenceContext",
@@ -93,6 +122,21 @@ var V2ChineseLabels = LabelSet{
 	DisplayKeys:     v2ChineseDisplayKeys,
 }
 
+// V3EnglishLabels and V3ChineseLabels target the v3 graph. V3 replaces the
+// v2 HealthTopic/topic_id nodes with Outcome/outcome_id nodes and uses direct
+// Ingredient->Evidence->Outcome relationships.
+var V3EnglishLabels = LabelSet{
+	Evidence:    "Evidence",
+	Outcome:     "Outcome",
+	DisplayKeys: v3EnglishDisplayKeys,
+}
+
+var V3ChineseLabels = LabelSet{
+	Evidence:    "Evidence",
+	Outcome:     "Outcome",
+	DisplayKeys: v3ChineseDisplayKeys,
+}
+
 // LabelsFor selects the label/property schema for a configured graph profile.
 func LabelsFor(bilingual, chinese bool) LabelSet {
 	if bilingual {
@@ -107,15 +151,29 @@ func LabelsFor(bilingual, chinese bool) LabelSet {
 	return EnglishLabels
 }
 
+// LabelsForProfile selects the label/property schema for a configured graph
+// profile. LabelsFor remains available for legacy callers.
+func LabelsForProfile(profile string, chinese bool) LabelSet {
+	switch profile {
+	case "v3-en":
+		return V3EnglishLabels
+	case "v3-zh":
+		return V3ChineseLabels
+	default:
+		return LabelsFor(profile == "v2-en" || profile == "v2-zh", chinese)
+	}
+}
+
 // chineseToEnglish normalises Chinese labels to the canonical English
 // type names the viewer expects (TYPE_DEPTHS / TYPE_COLORS etc.).
 var chineseToEnglish = map[string]string{
-	"配方":    "Product",
-	"成分":    "Ingredient",
-	"循证证据":  "Evidence",
-	"健康结局":  "HealthTopic",
-	"证据上下文": "EvidenceContext",
-	"证据层级":  "EvidenceLayer",
+	"配方":      "Product",
+	"成分":      "Ingredient",
+	"循证证据":    "Evidence",
+	"健康结局":    "HealthTopic",
+	"Outcome": "Outcome",
+	"证据上下文":   "EvidenceContext",
+	"证据层级":    "EvidenceLayer",
 }
 
 // GraphNode is a node as exposed by GET /v1/graph/kg (matches the
@@ -297,6 +355,7 @@ func (c *Client) Fetch(ctx context.Context, opts Options) (*KnowledgeGraph, erro
     title_zh: %[1]s.title_zh,
     label: %[1]s.label,
     topic_id: %[1]s.topic_id,
+    outcome_id: %[1]s.outcome_id,
     evidence_id: %[1]s.evidence_id,
     product_id: %[1]s.product_id,
     ingredient_id: %[1]s.ingredient_id,
@@ -305,34 +364,32 @@ func (c *Client) Fetch(ctx context.Context, opts Options) (*KnowledgeGraph, erro
     idn: id(%[1]s)
   }`, varName)
 	}
-	query := fmt.Sprintf(`
-// 分支 1:4 类节点间的直连边(排除 EvidenceContext)
+	branches := []string{fmt.Sprintf(`
+// 分支 1:4 类节点间的直连边(排除隐藏桥接节点)
 MATCH (a)-[r]->(b)
-WHERE NOT '%[1]s' IN labels(a) AND NOT '%[1]s' IN labels(b)
+WHERE NOT '%s' IN labels(a) AND NOT '%s' IN labels(b)
   AND ($label = '' OR $label IN labels(a) OR $label IN labels(b))
-RETURN %[2]s AS anode, %[3]s AS bnode, type(r) AS rt, properties(r) AS rprops%[4]s
-UNION ALL
+RETURN %s AS anode, %s AS bnode, type(r) AS rt, properties(r) AS rprops%s
+`, L.EvidenceContext, L.EvidenceContext, nodeProj("a"), nodeProj("b"), limitClause)}
+	if L.EvidenceContext != "" && L.Evidence != "" && L.HealthTopic != "" {
+		branches = append(branches, fmt.Sprintf(`
 // 分支 2:Ingredient -(EC)- Evidence  (EVIDENCE_FOR)
 MATCH (ing)-[]-(ec1)-[]-(ev)
-WHERE '%[1]s' IN labels(ec1) AND '%[5]s' IN labels(ev)
-  AND ing <> ev AND NOT '%[1]s' IN labels(ing)
+WHERE '%s' IN labels(ec1) AND '%s' IN labels(ev)
+  AND ing <> ev AND NOT '%s' IN labels(ing)
   AND ($label = '' OR $label IN labels(ing) OR $label IN labels(ev))
-RETURN %[6]s AS anode, %[7]s AS bnode, 'EVIDENCE_FOR' AS rt, null AS rprops%[4]s
-UNION ALL
+RETURN %s AS anode, %s AS bnode, 'EVIDENCE_FOR' AS rt, null AS rprops%s
+`, L.EvidenceContext, L.Evidence, L.EvidenceContext, nodeProj("ing"), nodeProj("ev"), limitClause))
+		branches = append(branches, fmt.Sprintf(`
 // 分支 3:Evidence -(EC)- HealthTopic  (SUPPORTS_TOPIC)
 MATCH (ev2)-[]-(ec2)-[]-(ht)
-WHERE '%[5]s' IN labels(ev2) AND '%[1]s' IN labels(ec2) AND '%[8]s' IN labels(ht)
+WHERE '%s' IN labels(ev2) AND '%s' IN labels(ec2) AND '%s' IN labels(ht)
   AND ev2 <> ht
   AND ($label = '' OR $label IN labels(ev2) OR $label IN labels(ht))
-RETURN %[9]s AS anode, %[10]s AS bnode, 'SUPPORTS_TOPIC' AS rt, null AS rprops%[4]s
-`,
-		L.EvidenceContext,                         // %[1]s
-		nodeProj("a"), nodeProj("b"), limitClause, // %[2]s %[3]s %[4]s
-		L.Evidence,                      // %[5]s
-		nodeProj("ing"), nodeProj("ev"), // %[6]s %[7]s
-		L.HealthTopic,                   // %[8]s
-		nodeProj("ev2"), nodeProj("ht"), // %[9]s %[10]s
-	)
+RETURN %s AS anode, %s AS bnode, 'SUPPORTS_TOPIC' AS rt, null AS rprops%s
+`, L.Evidence, L.EvidenceContext, L.HealthTopic, nodeProj("ev2"), nodeProj("ht"), limitClause))
+	}
+	query := strings.Join(branches, "\nUNION ALL\n")
 
 	sess := c.driver.NewSession(ctx, neo4j.SessionConfig{
 		DatabaseName: c.db,

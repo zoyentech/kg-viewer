@@ -41,12 +41,13 @@ func TestHandler_ServesEmbeddedHTML(t *testing.T) {
 		"new ResizeObserver",
 		"is-adapted",
 		`/v1/graph/kg`,               // live API URL
+		"controls.autoRotateSpeed = 0.88;", // 20% slower default rotation
 		"three@0.160.0",              // three.js CDN version pin
 		"focus && n.id === focus.id", // animation loop must not deref null focus
 		"function pickNodeId()",      // click raycast path is wired up
 		"hitboxInstances",            // transparent picking is batched
 		"new THREE.InstancedMesh",    //主体球体按实例批处理
-		"const NODE_LAYER_TYPES = ['Product', 'Ingredient', 'Evidence', 'HealthTopic'];",
+		"const NODE_LAYER_TYPES = ['Product', 'Ingredient', 'Evidence', 'Outcome'];",
 		"function makeNodeLayerMaterial(type)", // four legend-colored shared materials
 		"nodeLayerMeshes",                      // body meshes are partitioned by node type
 		"nodeLayerMesh.setColorAt",             // each layer keeps instance-level amount/focus color
@@ -66,13 +67,13 @@ func TestHandler_ServesEmbeddedHTML(t *testing.T) {
 		"for (const nodeLayerMesh of nodeLayerMeshes)",
 		"window.__KG_VIEWER_DEBUG__",
 		"renderer.info.render.calls",
-		"const SEARCH_TYPE_ORDER = ['Product', 'Ingredient', 'HealthTopic'];",
+		"const SEARCH_TYPE_ORDER = ['Product', 'Ingredient', 'Outcome'];",
 		"const allOrdered = SEARCH_TYPE_ORDER.filter(t => counts[t]);",
 		"if (!searchState.query) {", //空查询不展示搜索结果下拉
 		"linkGeometry.setAttribute('position'",
 		"linkGeometry.setAttribute('lineOpacity'",
-		"Product: 0,",  // 4-layer: Product → Ingredient → Evidence → HealthTopic
-		"Evidence: 2,", // Evidence 居中（介于 Ingredient 和 HealthTopic 之间）
+		"Product: 0,",  // 4-layer: Product → Ingredient → Evidence → Outcome
+		"Evidence: 2,", // Evidence 居中（介于 Ingredient 和 Outcome 之间）
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("viewer page missing %q", want)

@@ -25,6 +25,23 @@ func TestLoad_V2ChineseProfileUsesBilingualInstance(t *testing.T) {
 	}
 }
 
+func TestLoad_V3ChineseProfileUsesOutcomeInstance(t *testing.T) {
+	t.Setenv("KG_GRAPH_PROFILE", "v3-zh")
+	t.Setenv("KG_GRAPH_V3_URI", "bolt://192.168.31.201:7689")
+	t.Setenv("KG_GRAPH_V3_DATABASE", "neo4j")
+	t.Setenv("NEO4J_URI", "bolt://unused:7687")
+	t.Setenv("NEO4J_DATABASE", "unused")
+	t.Setenv("DB_LANG", "en")
+
+	cfg := Load()
+	if cfg.Neo4jURI != "bolt://192.168.31.201:7689" || cfg.Neo4jDatabase != "neo4j" {
+		t.Fatalf("v3 config = (%q, %q), want v3 instance", cfg.Neo4jURI, cfg.Neo4jDatabase)
+	}
+	if !cfg.IsChinese() || !cfg.IsBilingual() {
+		t.Fatal("v3-zh profile should select bilingual Chinese display fields")
+	}
+}
+
 func TestLoad_LegacyChineseProfileUsesLegacyInstance(t *testing.T) {
 	t.Setenv("KG_GRAPH_PROFILE", "legacy-zh")
 	t.Setenv("KG_GRAPH_LEGACY_ZH_URI", "bolt://192.168.31.201:7688")

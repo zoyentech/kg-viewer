@@ -48,6 +48,16 @@ func Load() *Config {
 		database = getEnv("KG_GRAPH_V2_DATABASE", database)
 		language = "zh"
 		bilingual = true
+	case "v3-en":
+		uri = getEnv("KG_GRAPH_V3_URI", uri)
+		database = getEnv("KG_GRAPH_V3_DATABASE", database)
+		language = "en"
+		bilingual = true
+	case "v3-zh":
+		uri = getEnv("KG_GRAPH_V3_URI", uri)
+		database = getEnv("KG_GRAPH_V3_DATABASE", database)
+		language = "zh"
+		bilingual = true
 	}
 
 	return &Config{
